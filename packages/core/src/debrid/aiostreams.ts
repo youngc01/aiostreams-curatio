@@ -28,9 +28,12 @@ import {
   selectStreamFile,
 } from '../usenet/integration/index.js';
 import {
+  ReleaseBlocklistRepository,
   UsenetLibraryRepository,
   type UsenetLibraryEntry,
 } from '../db/index.js';
+import { markReleaseDead } from '../release-blocklist/feedback.js';
+import { nzbContentKey } from '../release-blocklist/keys.js';
 
 const logger = createLogger('usenet/service');
 
@@ -230,7 +233,40 @@ export class NativeUsenetService implements UsenetDebridService {
         },
         'skipping nzb: cached failure (delete the library entry to retry)'
       );
+      // ensure the release is marked dead in the blocklist if it was previously failed on all providers
+      if (
+        existing.errorCode === 'missing_on_providers' ||
+        existing.errorCode === 'article_not_found'
+      ) {
+        markReleaseDead(
+          playbackInfo.releaseKey,
+          nzbContentKey(resolved?.contentHash)
+        );
+      }
       throw new DebridError('nzb previously failed on all providers', {
+        statusCode: 404,
+        statusText: 'Not Found',
+        code: 'NOT_FOUND',
+        headers: {},
+        body: null,
+        type: 'api_error',
+      });
+    }
+
+    if (
+      playbackInfo.releaseKey &&
+      (await ReleaseBlocklistRepository.isLocallyBlocked(
+        playbackInfo.releaseKey
+      ).catch(() => false))
+    ) {
+      // Only this instance's own verdicts block resolve; remote-sourced ones
+      // filter at list time and an explicit attempt is allowed through so a
+      // success can retract them.
+      logger.debug(
+        { hash: nzbHash, releaseKey: playbackInfo.releaseKey },
+        'skipping nzb: release is blocklisted by this instance'
+      );
+      throw new DebridError('release is blocklisted by this instance', {
         statusCode: 404,
         statusText: 'Not Found',
         code: 'NOT_FOUND',
@@ -278,6 +314,7 @@ export class NativeUsenetService implements UsenetDebridService {
       fileIndex: selected.index,
       innerPath: selected.path,
       filename: chosenFilename,
+      releaseKey: playbackInfo.releaseKey,
     });
 
     const url = `${appConfig.bootstrap.baseUrl}/api/v1/usenet/stream/${token}`;

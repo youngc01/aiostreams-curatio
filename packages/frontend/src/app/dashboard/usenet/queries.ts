@@ -214,6 +214,7 @@ export interface LibraryEntry {
   nzbUrl?: string;
   category?: string;
   password?: string;
+  releaseKey?: string;
 }
 
 const ROOT = ['dashboard', 'usenet'] as const;

@@ -16,6 +16,7 @@ import {
   hashNzbUrl,
 } from '../../debrid/utils.js';
 import {
+  ArticleNotFoundError,
   EngineOptions,
   ProviderConfig,
   serializeArchiveLayout,
@@ -25,6 +26,13 @@ import {
   type Nzb,
   type NzbContent,
 } from '../index.js';
+import {
+  markReleaseDead,
+  retractRelease,
+} from '../../release-blocklist/feedback.js';
+import { nzbContentKey } from '../../release-blocklist/keys.js';
+import { blocklistEvalOptions } from '../../release-blocklist/filter.js';
+import { ReleaseBlocklistRepository } from '../../db/repositories/release-blocklist.js';
 import {
   UsenetLibraryRepository,
   type UsenetLibraryEntry,
@@ -354,6 +362,8 @@ async function importNzb(
     startedAt?: number;
     /** Grab/parse timings for the resolve path's phase-breakdown log. */
     timings?: { importStart: number; grabbedAt: number; parsedAt: number };
+    /** Shareable release key for blocklist feedback, when the search knew one. */
+    releaseKey?: string;
   },
   jobSignal: AbortSignal
 ): Promise<UsenetLibraryFile[]> {
@@ -370,6 +380,7 @@ async function importNzb(
       source,
       nzbUrl,
       category: spec.category,
+      releaseKey: spec.releaseKey,
     }).catch(() => {});
     await UsenetLibraryRepository.setStatus(nzbHash, 'inspecting').catch(
       () => {}
@@ -387,6 +398,9 @@ async function importNzb(
         name,
         friendly.code
       ).catch(() => {});
+      if (err instanceof ArticleNotFoundError && err.allProviders) {
+        markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
+      }
       throw toDebridError(err);
     }
     if (spec.timings) {
@@ -415,6 +429,7 @@ async function importNzb(
         { nzbHash, ...content.availability },
         'nzb failed availability verification'
       );
+      markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
       throw await failImport(nzbHash, name, availFail.reason, availFail.code, {
         reasonCode: availFail.code,
       });
@@ -451,6 +466,11 @@ async function importNzb(
         'no streamable files in nzb'
       );
       const { reason, code } = classifyNoStreamable(content);
+      // Only the article-missing classification is provider-verified
+      // evidence; archive/encoding defect codes never feed the blocklist.
+      if (code === 'missing_on_providers') {
+        markReleaseDead(spec.releaseKey, nzbContentKey(nzbHash));
+      }
       throw await failImport(nzbHash, name, reason, code, {
         byCategory,
         archiveInner,
@@ -475,12 +495,23 @@ async function importNzb(
       nzbUrl,
       password: extractNzbPassword(nzb.meta, name),
       status: degraded ? 'degraded' : 'available',
+      releaseKey: spec.releaseKey,
     }).catch((err) =>
       logger.warn({ err, nzbHash }, 'failed to persist usenet library entry')
     );
+    // The release demonstrably exists (degraded still plays), so any dead
+    // verdict for it is wrong.
+    retractRelease(spec.releaseKey, nzbContentKey(nzbHash));
     // The census tail keeps auditing in the background; its final verdict
     // updates the entry (degraded/failed/promoted) when it completes.
-    spawnCensusShadow({ nzbHash, name, nzb, content, engine });
+    spawnCensusShadow({
+      nzbHash,
+      name,
+      nzb,
+      content,
+      engine,
+      releaseKey: spec.releaseKey,
+    });
     return files;
   } catch (err) {
     if (jobSignal.aborted) {
@@ -550,6 +581,12 @@ export async function resolveFileList(
       },
       'skipping nzb: same content previously failed via another source (delete the library entry to retry)'
     );
+    if (
+      existing.errorCode === 'missing_on_providers' ||
+      existing.errorCode === 'article_not_found'
+    ) {
+      markReleaseDead(playbackInfo.releaseKey, nzbContentKey(contentHash));
+    }
     throw new DebridError('nzb previously failed on all providers', {
       statusCode: 404,
       statusText: 'Not Found',
@@ -565,6 +602,33 @@ export async function resolveFileList(
   ) {
     UsenetLibraryRepository.touch(contentHash).catch(() => {});
     return { files: existing.files.map(toDebridFile), nzbHash: contentHash };
+  }
+
+  const contentKey = nzbContentKey(contentHash);
+  if (contentKey) {
+    const verdict = await ReleaseBlocklistRepository.evaluateKeys(
+      [contentKey],
+      blocklistEvalOptions()
+    )
+      .then((verdicts) => verdicts.get(contentKey))
+      .catch(() => undefined);
+    if (verdict?.filtered) {
+      logger.debug(
+        { hash: contentHash, key: contentKey, reason: verdict.reason },
+        'skipping nzb: post is blocklisted'
+      );
+      throw new DebridError(
+        `nzb is blocklisted (${verdict.reason ?? verdict.verdict})`,
+        {
+          statusCode: 404,
+          statusText: 'Not Found',
+          code: 'NOT_FOUND',
+          headers: {},
+          body: null,
+          type: 'api_error',
+        }
+      );
+    }
   }
   const existedBefore = !!existing;
 
@@ -588,6 +652,7 @@ export async function resolveFileList(
             eligibleOnly: true,
             deleteOnAbort: !existedBefore,
             timings: { importStart, grabbedAt, parsedAt },
+            releaseKey: playbackInfo.releaseKey,
           },
           jobSignal
         ),

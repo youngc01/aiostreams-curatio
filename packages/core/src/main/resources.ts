@@ -307,6 +307,13 @@ export async function processStreams(
     filterMs = Date.now() - filterStart;
   }
 
+  // The fetcher path already blocklist-filtered its streams; this pass only
+  // covers streams that appeared after it (meta requests and service
+  // wrapping), and runs before dedup for the same failover-variant reason.
+  if (isMeta || resolvedResults.hasNewStreams) {
+    processedStreams = await ctx.filterer.filterBlocklisted(processedStreams);
+  }
+
   const dedupStart = Date.now();
   processedStreams = await ctx.deduplicator.deduplicate(processedStreams);
   deduplicationMs = Date.now() - dedupStart;

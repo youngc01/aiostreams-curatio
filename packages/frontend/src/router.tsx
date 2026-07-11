@@ -13,6 +13,9 @@ import {
   UsersPage,
   TasksPage,
   CachePage,
+  BlocklistLayout,
+  BlocklistSourcesPage,
+  BlocklistEntriesPage,
   UsenetLayout,
   UsenetLibraryPage,
   UsenetStreamsPage,
@@ -184,6 +187,32 @@ const dashboardCacheRoute = createRoute({
   component: CachePage,
 });
 
+const dashboardBlocklistRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: 'blocklist',
+  component: BlocklistLayout,
+});
+
+const dashboardBlocklistIndexRoute = createRoute({
+  getParentRoute: () => dashboardBlocklistRoute,
+  path: '/',
+  beforeLoad: () => {
+    throw redirect({ to: '/dashboard/blocklist/sources' });
+  },
+});
+
+const dashboardBlocklistSourcesRoute = createRoute({
+  getParentRoute: () => dashboardBlocklistRoute,
+  path: 'sources',
+  component: BlocklistSourcesPage,
+});
+
+const dashboardBlocklistEntriesRoute = createRoute({
+  getParentRoute: () => dashboardBlocklistRoute,
+  path: 'entries',
+  component: BlocklistEntriesPage,
+});
+
 const dashboardUsenetRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: 'usenet',
@@ -246,6 +275,11 @@ const routeTree = rootRoute.addChildren([
     dashboardUsersRoute,
     dashboardTasksRoute,
     dashboardCacheRoute,
+    dashboardBlocklistRoute.addChildren([
+      dashboardBlocklistIndexRoute,
+      dashboardBlocklistSourcesRoute,
+      dashboardBlocklistEntriesRoute,
+    ]),
     dashboardUsenetRoute.addChildren([
       dashboardUsenetIndexRoute,
       dashboardUsenetLibraryRoute,

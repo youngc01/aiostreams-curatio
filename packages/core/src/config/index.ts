@@ -24,6 +24,7 @@ import {
   builtinsSchema,
   analyticsSchema,
   usenetSchema,
+  releaseBlocklistSchema,
 } from './schema/index.js';
 
 export const runtimeSchemas = {
@@ -45,6 +46,7 @@ export const runtimeSchemas = {
   builtins: builtinsSchema,
   analytics: analyticsSchema,
   usenet: usenetSchema,
+  releaseBlocklist: releaseBlocklistSchema,
 } as const;
 
 export const runtimeKeyAliases: Record<string, string> = {

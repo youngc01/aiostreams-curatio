@@ -19,6 +19,8 @@ import {
   BiSortUp,
   BiSortDown,
   BiCloudUpload,
+  BiBlock,
+  BiCheckShield,
 } from 'react-icons/bi';
 import { Card } from '@/components/ui/card';
 import { Button, IconButton } from '@/components/ui/button';
@@ -31,6 +33,7 @@ import {
   PaginationEllipsis,
   PaginationItem,
   PaginationTrigger,
+  pageWindow,
 } from '@/components/ui/pagination';
 import { cn } from '@/components/ui/core/styling';
 import { useDebounce } from '@/hooks/debounce';
@@ -58,6 +61,7 @@ import { NzbBrowser } from './_components/nzb-browser';
 import { EntryInfoModal } from './_components/entry-info-modal';
 import { SettingsPageHeader } from '../settings/_components/settings-card';
 import { formatBytes } from '@/lib/format';
+import { api } from '@/lib/api';
 
 const STATUS_STYLE: Record<LibraryStatus, string> = {
   queued: 'bg-[--subtle] text-[--muted]',
@@ -138,25 +142,6 @@ function ViewToggle({
       {item('list', <BiListUl />, 'List view')}
     </div>
   );
-}
-
-/**
- * Windowed page list for the Pagination primitive: first, last, the current
- * page ±1, with `'…'` markers for the gaps. e.g. `[1, '…', 4, 5, 6, '…', 20]`.
- */
-function pageWindow(current: number, total: number): (number | '…')[] {
-  const pages = new Set<number>([1, total, current - 1, current, current + 1]);
-  const sorted = [...pages]
-    .filter((p) => p >= 1 && p <= total)
-    .sort((a, b) => a - b);
-  const out: (number | '…')[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) out.push('…');
-    out.push(p);
-    prev = p;
-  }
-  return out;
 }
 
 function StatusPill({ status }: { status: LibraryStatus }) {
@@ -327,6 +312,28 @@ function EntryActions({
     a.remove();
   };
 
+  // Prefer the portable fingerprint; fall back to the exact-post content
+  // hash, which every parsed entry has as its row key.
+  const blocklistKey =
+    e.releaseKey ??
+    (/^[0-9a-f]{40}$/.test(e.nzbHash) ? `nh1:${e.nzbHash}` : undefined);
+
+  const blockRelease = () => {
+    api('POST /dashboard/blocklist/mark', {
+      body: { key: blocklistKey, verdict: 'dead' },
+    })
+      .then(() => toast.success('Release blocked'))
+      .catch((err: any) => toast.error(err?.message ?? 'Block failed'));
+  };
+
+  const allowRelease = () => {
+    api('POST /dashboard/blocklist/unmark', {
+      body: { key: blocklistKey },
+    })
+      .then(() => toast.success('Release allowed'))
+      .catch((err: any) => toast.error(err?.message ?? 'Allow failed'));
+  };
+
   return (
     <div className="flex items-center gap-2">
       <Button
@@ -392,6 +399,27 @@ function EntryActions({
         >
           Details
         </Tooltip>
+        {blocklistKey && (
+          <Tooltip
+            trigger={
+              <IconButton
+                size="sm"
+                intent="gray-subtle"
+                icon={
+                  e.status === 'failed' ? <BiCheckShield /> : <BiBlock />
+                }
+                aria-label={
+                  e.status === 'failed' ? 'Allow release' : 'Block release'
+                }
+                onClick={e.status === 'failed' ? allowRelease : blockRelease}
+              />
+            }
+          >
+            {e.status === 'failed'
+              ? 'Allow this release (clears blocklist verdicts)'
+              : 'Block this release on the blocklist'}
+          </Tooltip>
+        )}
         <Tooltip
           trigger={
             <IconButton

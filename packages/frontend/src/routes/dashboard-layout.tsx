@@ -26,9 +26,12 @@ import {
   BiData,
   BiSliderAlt,
   BiCloudDownload,
+  BiBlock,
 } from 'react-icons/bi';
 import { LayoutHeaderBackground } from '@/components/layout-header-background';
 import { SECTIONS } from '@/app/dashboard/usenet/sections';
+import { BLOCKLIST_SECTIONS } from '@/app/dashboard/blocklist/sections';
+import type { DashboardSection } from '@/components/shared/section-nav-select';
 
 // Order mirrors how operators typically navigate the dashboard: dashboards
 // at the top, operational tools in the middle, infrastructure (Proxy) before
@@ -48,18 +51,24 @@ const NAV: {
   // The Usenet item expands into an inline accordion of its sub-sections
   // (wired up in the items mapping below).
   { label: 'Usenet', href: '/dashboard/usenet', icon: BiCloudDownload },
+  { label: 'Blocklists', href: '/dashboard/blocklist', icon: BiBlock },
   { label: 'Proxy', href: '/dashboard/proxy', icon: BiNetworkChart },
   { label: 'Settings', href: '/dashboard/settings', icon: BiCog },
 ];
+
+// Nav items that expand into an inline accordion of sub-sections, each a
+// child route (`<href>/<section>`). The header navigates to the base path
+// (which redirects to the default section).
+const SECTIONED: Record<string, readonly DashboardSection[]> = {
+  '/dashboard/usenet': SECTIONS,
+  '/dashboard/blocklist': BLOCKLIST_SECTIONS,
+};
 
 export function DashboardLayout() {
   // session is guaranteed by the route's beforeLoad — no loading gate needed
   const { signOut } = useSession();
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  // While on a usenet route the sidebar item expands into an accordion that
-  // highlights the active section (the last path segment).
-  const isOnUsenet = pathname.startsWith('/dashboard/usenet');
 
   const confirmSignOut = useConfirmationDialog({
     title: 'Sign Out',
@@ -71,21 +80,20 @@ export function DashboardLayout() {
   });
 
   const items: SidebarItem[] = NAV.map((n) => {
-    if (n.href === '/dashboard/usenet') {
-      // Usenet expands into an inline oval accordion of its sub-sections, each a
-      // child route (`/dashboard/usenet/<section>`). The header navigates to the
-      // base path (which redirects to the default section).
+    const sections = SECTIONED[n.href];
+    if (sections) {
+      const isOn = pathname.startsWith(n.href);
       return {
         name: n.label,
         iconType: n.icon,
-        isCurrent: isOnUsenet,
-        expanded: isOnUsenet,
-        onClick: () => navigate({ to: '/dashboard/usenet' }),
-        subItems: SECTIONS.map((s) => ({
+        isCurrent: isOn,
+        expanded: isOn,
+        onClick: () => navigate({ to: n.href }),
+        subItems: sections.map((s) => ({
           name: s.label,
           iconType: s.icon,
-          isCurrent: pathname === `/dashboard/usenet/${s.id}`,
-          onClick: () => navigate({ to: `/dashboard/usenet/${s.id}` }),
+          isCurrent: pathname === `${n.href}/${s.id}`,
+          onClick: () => navigate({ to: `${n.href}/${s.id}` }),
         })),
       };
     }

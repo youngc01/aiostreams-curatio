@@ -107,6 +107,8 @@ export interface UsenetLibraryEntry {
   category?: string;
   /** NZB password (from `<meta>` or a `{{password}}` name token), if any. */
   password?: string;
+  /** Shareable release key (`wd1:`), when indexer metadata allowed one. */
+  releaseKey?: string;
 }
 
 interface UsenetLibraryRow {
@@ -131,6 +133,7 @@ interface UsenetLibraryRow {
   nzb_url: string | null;
   category: string | null;
   password: string | null;
+  release_key: string | null;
   [k: string]: unknown;
 }
 
@@ -192,10 +195,11 @@ function mapRow(row: UsenetLibraryRow): UsenetLibraryEntry {
     nzbUrl: row.nzb_url ?? undefined,
     category: row.category ?? undefined,
     password: row.password ?? undefined,
+    releaseKey: row.release_key ?? undefined,
   };
 }
 
-const COLUMNS = sql`nzb_hash, name, size, file_index, files, status, fail_reason, error_code, fail_count, added_at, last_used_at, nzo_id, progress, bytes_done, bytes_total, owner, source, import_ms, nzb_url, category, password`;
+const COLUMNS = sql`nzb_hash, name, size, file_index, files, status, fail_reason, error_code, fail_count, added_at, last_used_at, nzo_id, progress, bytes_done, bytes_total, owner, source, import_ms, nzb_url, category, password, release_key`;
 
 /**
  * Persistence for the native usenet library/history, one row per NZB,
@@ -366,14 +370,15 @@ export class UsenetLibraryRepository {
     nzbUrl?: string;
     bytesTotal?: number;
     category?: string;
+    releaseKey?: string;
   }): Promise<void> {
     await getDb().exec(
       sql`INSERT INTO usenet_library
             (nzb_hash, name, files, status, fail_count, last_used_at,
-             nzo_id, progress, bytes_done, bytes_total, owner, source, nzb_url, category)
+             nzo_id, progress, bytes_done, bytes_total, owner, source, nzb_url, category, release_key)
           VALUES
             (${entry.nzbHash}, ${entry.name ?? null}, '[]', 'queued', 0, CURRENT_TIMESTAMP,
-             ${entry.nzbHash}, 0, 0, ${entry.bytesTotal ?? 0}, ${entry.owner ?? null}, ${entry.source ?? 'auto'}, ${entry.nzbUrl ?? null}, ${entry.category ?? null})
+             ${entry.nzbHash}, 0, 0, ${entry.bytesTotal ?? 0}, ${entry.owner ?? null}, ${entry.source ?? 'auto'}, ${entry.nzbUrl ?? null}, ${entry.category ?? null}, ${entry.releaseKey ?? null})
           ON CONFLICT(nzb_hash) DO UPDATE SET
             name = COALESCE(EXCLUDED.name, usenet_library.name),
             status = 'queued',
@@ -382,6 +387,7 @@ export class UsenetLibraryRepository {
             source = EXCLUDED.source,
             nzb_url = COALESCE(EXCLUDED.nzb_url, usenet_library.nzb_url),
             category = COALESCE(EXCLUDED.category, usenet_library.category),
+            release_key = COALESCE(EXCLUDED.release_key, usenet_library.release_key),
             last_used_at = CURRENT_TIMESTAMP`
     );
     usenetLibraryBus.emit('change');
@@ -432,16 +438,17 @@ export class UsenetLibraryRepository {
     nzbUrl?: string;
     password?: string;
     status?: 'available' | 'degraded';
+    releaseKey?: string;
   }): Promise<void> {
     const filesJson = JSON.stringify(entry.files ?? []);
     const status = entry.status ?? 'available';
     await getDb().exec(
       sql`INSERT INTO usenet_library
             (nzb_hash, name, size, file_index, files, status, fail_reason, error_code, fail_count, last_used_at,
-             nzo_id, progress, bytes_done, bytes_total, owner, source, import_ms, nzb_url, password)
+             nzo_id, progress, bytes_done, bytes_total, owner, source, import_ms, nzb_url, password, release_key)
           VALUES
             (${entry.nzbHash}, ${entry.name ?? null}, ${entry.size ?? null}, ${entry.fileIndex ?? null}, ${filesJson}, ${status}, NULL, NULL, 0, CURRENT_TIMESTAMP,
-             ${entry.nzbHash}, 1, ${entry.size ?? 0}, ${entry.size ?? 0}, ${entry.owner ?? null}, ${entry.source ?? 'auto'}, ${entry.importMs ?? null}, ${entry.nzbUrl ?? null}, ${entry.password ?? null})
+             ${entry.nzbHash}, 1, ${entry.size ?? 0}, ${entry.size ?? 0}, ${entry.owner ?? null}, ${entry.source ?? 'auto'}, ${entry.importMs ?? null}, ${entry.nzbUrl ?? null}, ${entry.password ?? null}, ${entry.releaseKey ?? null})
           ON CONFLICT(nzb_hash) DO UPDATE SET
             name = EXCLUDED.name,
             size = EXCLUDED.size,
@@ -458,6 +465,7 @@ export class UsenetLibraryRepository {
             import_ms = COALESCE(EXCLUDED.import_ms, usenet_library.import_ms),
             nzb_url = COALESCE(EXCLUDED.nzb_url, usenet_library.nzb_url),
             password = COALESCE(EXCLUDED.password, usenet_library.password),
+            release_key = COALESCE(EXCLUDED.release_key, usenet_library.release_key),
             last_used_at = CURRENT_TIMESTAMP`
     );
     usenetLibraryBus.emit('change');

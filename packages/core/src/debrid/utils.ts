@@ -207,6 +207,7 @@ export interface NZB extends BaseFile {
   easynewsUrl?: string;
   zyclopsHealth?: string;
   serviceItemId?: string;
+  releaseKey?: string;
 }
 
 export interface TorrentWithSelectedFile extends Torrent {

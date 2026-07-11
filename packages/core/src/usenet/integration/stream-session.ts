@@ -33,6 +33,8 @@ import {
 } from '../../db/index.js';
 import { type UsenetStreamToken, decodeUsenetStreamToken } from './tokens.js';
 import { friendlyUsenetError } from './errors.js';
+import { markReleaseDead } from '../../release-blocklist/feedback.js';
+import { nzbContentKey } from '../../release-blocklist/keys.js';
 import { usenetEngineRegistry, getUsenetEngineConfig } from './engine.js';
 import { fetchNzb, parseNzbCached, canonicaliseNzbHash } from './library.js';
 
@@ -267,6 +269,8 @@ function holeHooksFor(
       decoded.filename,
       'missing_on_providers'
     ).catch(() => {});
+    // Pad caps only trip on holes confirmed missing on every provider.
+    markReleaseDead(decoded.releaseKey, nzbContentKey(hash));
     // Drop the warm session so a player retry re-opens fresh and sees the
     // failed entry.
     streamSessions.delete(sessionKey);
@@ -450,6 +454,11 @@ async function getStreamSession(
           decoded.filename,
           friendly.code
         ).catch(() => {});
+        // NotStreamableError means the release exists; only an all-provider
+        // article miss is blocklist evidence.
+        if (err instanceof ArticleNotFoundError && err.allProviders) {
+          markReleaseDead(decoded.releaseKey, nzbContentKey(hash));
+        }
       }
       throw err;
     }

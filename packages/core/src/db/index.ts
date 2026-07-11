@@ -21,6 +21,13 @@ export {
   type UsenetLibrarySortDir,
 } from './repositories/usenet-library.js';
 export {
+  ReleaseBlocklistRepository,
+  clampRefreshSeconds,
+  MIN_REFRESH_SECONDS,
+  MAX_REFRESH_SECONDS,
+  type BlocklistAggregatedEntry,
+} from './repositories/release-blocklist.js';
+export {
   UsenetMetricsRepository,
   type UsenetMetricDelta,
   type UsenetProviderRollup,

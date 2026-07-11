@@ -26,6 +26,7 @@ import {
   pruneUsenetMetrics,
   requeueInterruptedInspects,
   flushAllDiskCaches,
+  ReleaseBlocklistRemoteService,
 } from '@aiostreams/core';
 
 const logger = createLogger('server');
@@ -136,6 +137,23 @@ function registerUsenetTasks() {
   });
 }
 
+function registerReleaseBlocklistTasks() {
+  TaskManager.register({
+    id: 'release-blocklist-refresh',
+    label: 'Refresh remote blocklists',
+    description:
+      'Re-fetches subscribed remote release blocklists whose per-source ' +
+      'refresh interval has elapsed.',
+    category: 'data-sync',
+    kind: 'scheduled',
+    intervalMs: 15 * 60_000,
+    enabled: true,
+    destructive: false,
+    multiReplica: 'single',
+    run: async () => ReleaseBlocklistRemoteService.refreshDue(),
+  });
+}
+
 async function initialiseRedis() {
   if (appConfig.bootstrap.redisUri) {
     await Cache.testRedisConnection();
@@ -191,6 +209,7 @@ async function start() {
     registerPruneTask();
     registerCacheTasks();
     registerUsenetTasks();
+    registerReleaseBlocklistTasks();
     void requeueInterruptedInspects();
     await initialiseAuth();
     startAnalytics();
