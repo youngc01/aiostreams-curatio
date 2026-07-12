@@ -17,6 +17,9 @@ import {
   exportUsenetLibraryNzb,
   UsenetLibraryRepository,
   usenetLibraryBus,
+  ReleaseBlocklistRepository,
+  blocklistEvalOptions,
+  nzbContentKey,
   type UsenetStatsWindow,
   type UsenetLibraryStatusGroup,
   type UsenetLibraryStatus,
@@ -230,6 +233,34 @@ router.get('/library/stream', (req, res) => {
   });
 });
 
+/**
+ * Annotate library rows with whether the release blocklist currently flags
+ * them (under the wd1 fingerprint and/or nh1 content-hash key)
+ */
+async function annotateBlocked<
+  T extends { nzbHash: string; releaseKey?: string },
+>(entries: T[]): Promise<Array<T & { blocked: boolean }>> {
+  const keysFor = (e: T) =>
+    [e.releaseKey, nzbContentKey(e.nzbHash)].filter((k): k is string => !!k);
+  try {
+    const keys = [...new Set(entries.flatMap(keysFor))];
+    if (keys.length === 0) {
+      return entries.map((e) => ({ ...e, blocked: false }));
+    }
+    const verdicts = await ReleaseBlocklistRepository.evaluateKeys(
+      keys,
+      blocklistEvalOptions()
+    );
+    return entries.map((e) => ({
+      ...e,
+      blocked: keysFor(e).some((k) => verdicts.get(k)?.filtered),
+    }));
+  } catch (err) {
+    logger.warn({ err }, 'blocklist annotation of library entries failed');
+    return entries.map((e) => ({ ...e, blocked: false }));
+  }
+}
+
 router.get('/library', async (req, res, next) => {
   try {
     const limit = Number(req.query.limit ?? 50);
@@ -261,7 +292,12 @@ router.get('/library', async (req, res, next) => {
       sort,
       dir,
     });
-    res.status(200).json(createResponse({ success: true, data }));
+    res.status(200).json(
+      createResponse({
+        success: true,
+        data: { ...data, entries: await annotateBlocked(data.entries) },
+      })
+    );
   } catch (err) {
     next(err);
   }

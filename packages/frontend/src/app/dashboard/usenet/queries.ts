@@ -215,6 +215,19 @@ export interface LibraryEntry {
   category?: string;
   password?: string;
   releaseKey?: string;
+  blocked?: boolean;
+}
+
+/**
+ * Every blocklist key a library entry is known by: the portable `wd1:`
+ * fingerprint (when the search recorded one) plus the exact-post `nh1:`
+ * content hash that parsed rows are keyed under.
+ */
+export function releaseBlocklistKeys(e: LibraryEntry): string[] {
+  const keys: string[] = [];
+  if (e.releaseKey) keys.push(e.releaseKey);
+  if (/^[0-9a-f]{40}$/.test(e.nzbHash)) keys.push(`nh1:${e.nzbHash}`);
+  return keys;
 }
 
 const ROOT = ['dashboard', 'usenet'] as const;
@@ -454,6 +467,25 @@ export function usePlayUrl() {
  */
 export function usenetNzbExportUrl(hash: string): string {
   return `/api/v1/dashboard/usenet/library/${encodeURIComponent(hash)}/nzb`;
+}
+
+/**
+ * Mark a library entry's release dead on this instance's blocklist, under
+ * every key it is known by. Refetches the library (for the `blocked` flag)
+ * and the blocklist pages.
+ */
+export function useBlockRelease() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (entry: LibraryEntry) =>
+      api('POST /dashboard/blocklist/mark', {
+        body: { keys: releaseBlocklistKeys(entry), verdict: 'dead' },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [...ROOT, 'library'] });
+      qc.invalidateQueries({ queryKey: ['dashboard', 'blocklist'] });
+    },
+  });
 }
 
 export function useDeleteLibraryEntry() {

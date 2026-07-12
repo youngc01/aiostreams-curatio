@@ -20,7 +20,6 @@ import {
   BiSortDown,
   BiCloudUpload,
   BiBlock,
-  BiCheckShield,
 } from 'react-icons/bi';
 import { Card } from '@/components/ui/card';
 import { Button, IconButton } from '@/components/ui/button';
@@ -46,12 +45,14 @@ import {
 import {
   useUsenetLibrary,
   useUsenetLibraryStream,
+  useBlockRelease,
   useDeleteLibraryEntry,
   useDeleteAllLibraryEntries,
   useAddNzb,
   useUploadNzb,
   usePlayUrl,
   usenetNzbExportUrl,
+  releaseBlocklistKeys,
   type LibraryEntry,
   type LibraryStatus,
   type LibrarySort,
@@ -61,7 +62,6 @@ import { NzbBrowser } from './_components/nzb-browser';
 import { EntryInfoModal } from './_components/entry-info-modal';
 import { SettingsPageHeader } from '../settings/_components/settings-card';
 import { formatBytes } from '@/lib/format';
-import { api } from '@/lib/api';
 
 const STATUS_STYLE: Record<LibraryStatus, string> = {
   queued: 'bg-[--subtle] text-[--muted]',
@@ -282,11 +282,13 @@ function EntryActions({
   entry: e,
   onBrowse,
   onInfo,
+  onBlock,
   onDelete,
 }: {
   entry: LibraryEntry;
   onBrowse: (e: LibraryEntry) => void;
   onInfo: (e: LibraryEntry) => void;
+  onBlock: (e: LibraryEntry) => void;
   onDelete: (hash: string) => void;
 }) {
   const playUrl = usePlayUrl();
@@ -310,28 +312,6 @@ function EntryActions({
     document.body.appendChild(a);
     a.click();
     a.remove();
-  };
-
-  // Prefer the portable fingerprint; fall back to the exact-post content
-  // hash, which every parsed entry has as its row key.
-  const blocklistKey =
-    e.releaseKey ??
-    (/^[0-9a-f]{40}$/.test(e.nzbHash) ? `nh1:${e.nzbHash}` : undefined);
-
-  const blockRelease = () => {
-    api('POST /dashboard/blocklist/mark', {
-      body: { key: blocklistKey, verdict: 'dead' },
-    })
-      .then(() => toast.success('Release blocked'))
-      .catch((err: any) => toast.error(err?.message ?? 'Block failed'));
-  };
-
-  const allowRelease = () => {
-    api('POST /dashboard/blocklist/unmark', {
-      body: { key: blocklistKey },
-    })
-      .then(() => toast.success('Release allowed'))
-      .catch((err: any) => toast.error(err?.message ?? 'Allow failed'));
   };
 
   return (
@@ -399,24 +379,21 @@ function EntryActions({
         >
           Details
         </Tooltip>
-        {blocklistKey && (
+        {releaseBlocklistKeys(e).length > 0 && (
           <Tooltip
             trigger={
               <IconButton
                 size="sm"
                 intent="gray-subtle"
-                icon={
-                  e.status === 'failed' ? <BiCheckShield /> : <BiBlock />
-                }
-                aria-label={
-                  e.status === 'failed' ? 'Allow release' : 'Block release'
-                }
-                onClick={e.status === 'failed' ? allowRelease : blockRelease}
+                icon={<BiBlock />}
+                aria-label="Block release"
+                disabled={e.blocked}
+                onClick={() => onBlock(e)}
               />
             }
           >
-            {e.status === 'failed'
-              ? 'Allow this release (clears blocklist verdicts)'
+            {e.blocked
+              ? 'Already on the release blocklist'
               : 'Block this release on the blocklist'}
           </Tooltip>
         )}
@@ -451,6 +428,7 @@ function EntryCard({
   onToggleSelect,
   onBrowse,
   onInfo,
+  onBlock,
   onDelete,
 }: {
   entry: LibraryEntry;
@@ -460,6 +438,7 @@ function EntryCard({
   onToggleSelect: (hash: string, value: boolean) => void;
   onBrowse: (e: LibraryEntry) => void;
   onInfo: (e: LibraryEntry) => void;
+  onBlock: (e: LibraryEntry) => void;
   onDelete: (hash: string) => void;
 }) {
   const e = entry;
@@ -515,6 +494,7 @@ function EntryCard({
                 entry={e}
                 onBrowse={onBrowse}
                 onInfo={onInfo}
+                onBlock={onBlock}
                 onDelete={onDelete}
               />
             </div>
@@ -564,6 +544,7 @@ function EntryCard({
             entry={e}
             onBrowse={onBrowse}
             onInfo={onInfo}
+            onBlock={onBlock}
             onDelete={onDelete}
           />
         </div>
@@ -629,7 +610,11 @@ export function UsenetLibraryPage() {
   });
   const del = useDeleteLibraryEntry();
   const delAll = useDeleteAllLibraryEntries();
+  const block = useBlockRelease();
   const pending = React.useRef<string[]>([]);
+  const [blockTarget, setBlockTarget] = React.useState<LibraryEntry | null>(
+    null
+  );
 
   const entries = query.data?.entries ?? [];
   const total = query.data?.total ?? 0;
@@ -686,6 +671,25 @@ export function UsenetLibraryPage() {
         });
     },
   });
+
+  const confirmBlock = useConfirmationDialog({
+    title: 'Block release',
+    description: `Mark "${blockTarget?.name ?? blockTarget?.nzbHash ?? ''}" as dead on this instance's release blocklist? Its streams stop appearing in results; undo from the Blocklist page.`,
+    actionText: 'Block',
+    actionIntent: 'alert-subtle',
+    onConfirm: () => {
+      if (!blockTarget) return;
+      block
+        .mutateAsync(blockTarget)
+        .then(() => toast.success('Release blocked'))
+        .catch((err: any) => toast.error(err?.message ?? 'Block failed'));
+    },
+  });
+
+  const onBlock = (entry: LibraryEntry) => {
+    setBlockTarget(entry);
+    confirmBlock.open();
+  };
 
   const onDelete = (hash: string) => {
     pending.current = [hash];
@@ -889,6 +893,7 @@ export function UsenetLibraryPage() {
                   onToggleSelect={toggleSelect}
                   onBrowse={setBrowse}
                   onInfo={setInfo}
+                  onBlock={onBlock}
                   onDelete={onDelete}
                 />
               ))}
@@ -943,6 +948,7 @@ export function UsenetLibraryPage() {
       />
       <ConfirmationDialog {...confirm} />
       <ConfirmationDialog {...confirmDeleteAll} />
+      <ConfirmationDialog {...confirmBlock} />
     </div>
   );
 }

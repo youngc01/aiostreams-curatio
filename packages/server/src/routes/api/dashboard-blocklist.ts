@@ -55,7 +55,8 @@ const PatchSourceSchema = z.object({
 });
 
 const MarkSchema = z.object({
-  key: z.string().trim().min(1),
+  key: z.string().trim().min(1).optional(),
+  keys: z.array(z.string().trim().min(1)).max(8).optional(),
   verdict: VerdictSchema,
   backbones: z.array(z.string().trim().min(1)).max(50).optional(),
 });
@@ -257,7 +258,9 @@ router.post('/sources/remote', async (req, res, next) => {
       await ReleaseBlocklistRemoteService.refreshByIds(newIds);
     } else if (newIds.length > 1) {
       void ReleaseBlocklistRemoteService.refreshByIds(newIds).catch((err) =>
-        logger.warn(`background refresh of new blocklist sources failed: ${err}`)
+        logger.warn(
+          `background refresh of new blocklist sources failed: ${err}`
+        )
       );
     }
 
@@ -420,21 +423,31 @@ router.get('/export', async (req, res, next) => {
   }
 });
 
-// POST /dashboard/blocklist/mark - manual local verdict.
+// POST /dashboard/blocklist/mark - manual local verdict. A release known by
+// several keys (wd1 fingerprint + nh1 content hash) is marked under all of
+// them.
 router.post('/mark', async (req, res, next) => {
   try {
     const body = MarkSchema.parse(req.body ?? {});
-    if (!isValidReleaseKey(body.key)) {
+    const keys = [
+      ...new Set([...(body.key ? [body.key] : []), ...(body.keys ?? [])]),
+    ];
+    if (keys.length === 0) {
+      return badRequest(res, 'key or keys is required');
+    }
+    if (!keys.every((k) => isValidReleaseKey(k))) {
       return badRequest(
         res,
-        'key must be a btih:<infohash> or wd1:<fingerprint> release key'
+        'keys must be btih:<infohash>, wd1:<fingerprint> or nh1:<content hash> release keys'
       );
     }
-    await ReleaseBlocklistRepository.markVerdict(
-      body.key,
-      body.verdict,
-      body.backbones ?? []
-    );
+    for (const key of keys) {
+      await ReleaseBlocklistRepository.markVerdict(
+        key,
+        body.verdict,
+        body.backbones ?? []
+      );
+    }
     res
       .status(200)
       .json(createResponse({ success: true, data: await snapshot() }));
