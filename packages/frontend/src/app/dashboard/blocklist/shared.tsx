@@ -18,6 +18,7 @@ export interface BlocklistSource {
   lastUpdated: number;
   status: string | null;
   count: number;
+  uniqueCount: number;
 }
 
 export interface Snapshot {

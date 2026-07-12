@@ -209,7 +209,15 @@ function SourcesView({
                     {source.status ?? '—'}
                   </td>
                   <td className="p-3 text-right tabular-nums">
-                    {source.count}
+                    <div>{source.count}</div>
+                    {source.count > 0 && (
+                      <div
+                        className="text-xs text-[--muted]"
+                        title="Entries no other source lists"
+                      >
+                        {source.uniqueCount} unique
+                      </div>
+                    )}
                   </td>
                   <td className="p-3">
                     {source.kind === 'local' ? (

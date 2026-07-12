@@ -154,6 +154,77 @@ export function clampRefreshSeconds(value: number): number {
 
 const SOURCE_COLUMNS = sql`id, kind, name, url, enabled, trust, refresh_seconds, etag, last_checked, last_updated, status, sort`;
 
+type Db = ReturnType<typeof getDb>;
+
+/** Inline subquery resolving a source's integer rid from its public id. */
+function sourceRidSql(id: string): SqlFragment {
+  return sql`(SELECT rid FROM release_blocklist_sources WHERE id = ${id})`;
+}
+
+/** Inline subquery resolving a release key's interned integer id. */
+function keyIdSql(key: string): SqlFragment {
+  return sql`(SELECT id FROM release_blocklist_keys WHERE k = ${key})`;
+}
+
+/** Insert-or-get interned ids for release keys. */
+async function internKeys(
+  db: Db,
+  items: ReadonlyArray<{ k: string; kind: string }>
+): Promise<Map<string, number>> {
+  const ids = new Map<string, number>();
+  for (let i = 0; i < items.length; i += INSERT_CHUNK_ROWS) {
+    const chunk = items.slice(i, i + INSERT_CHUNK_ROWS);
+    await db.exec(
+      sql`INSERT INTO release_blocklist_keys (k, kind)
+          VALUES ${join(chunk.map((it) => sql`(${it.k}, ${it.kind})`))}
+          ON CONFLICT (k) DO NOTHING`
+    );
+    const rows = await db.query<{ id: number | string; k: string }>(
+      sql`SELECT id, k FROM release_blocklist_keys
+          WHERE k IN (${join(chunk.map((it) => sql`${it.k}`))})`
+    );
+    for (const row of rows) ids.set(row.k, num(row.id));
+  }
+  return ids;
+}
+
+/** Insert-or-get interned ids for backbone-set csv strings. */
+async function internBackboneSets(
+  db: Db,
+  csvs: readonly string[]
+): Promise<Map<string, number>> {
+  const ids = new Map<string, number>();
+  const list = [...new Set(csvs)];
+  for (let i = 0; i < list.length; i += INSERT_CHUNK_ROWS) {
+    const chunk = list.slice(i, i + INSERT_CHUNK_ROWS);
+    await db.exec(
+      sql`INSERT INTO release_blocklist_backbone_sets (csv)
+          VALUES ${join(chunk.map((csv) => sql`(${csv})`))}
+          ON CONFLICT (csv) DO NOTHING`
+    );
+    const rows = await db.query<{ id: number | string; csv: string }>(
+      sql`SELECT id, csv FROM release_blocklist_backbone_sets
+          WHERE csv IN (${join(chunk.map((csv) => sql`${csv}`))})`
+    );
+    for (const row of rows) ids.set(row.csv, num(row.id));
+  }
+  return ids;
+}
+
+/**
+ * Drop key rows no entry references any more, scoped to one key when the
+ * caller knows which key it just removed.
+ */
+async function gcKeys(db: Db, key?: string): Promise<void> {
+  const scope = key === undefined ? sql`` : sql`k = ${key} AND `;
+  await db.exec(
+    sql`DELETE FROM release_blocklist_keys
+        WHERE ${scope}NOT EXISTS (
+          SELECT 1 FROM release_blocklist_entries e
+          WHERE e.key_id = release_blocklist_keys.id)`
+  );
+}
+
 export class ReleaseBlocklistRepository {
   private static presence: { value: boolean; at: number } | null = null;
 
@@ -193,14 +264,17 @@ export class ReleaseBlocklistRepository {
       const chunk = unique.slice(i, i + KEY_CHUNK_SIZE);
       const placeholders = join(chunk.map((k) => sql`${k}`));
       const rows = await getDb().query<EntryRow>(
-        sql`SELECT e.source_id, e.k, e.kind, e.verdict, e.n, e.last_at, e.backbones, s.trust
+        sql`SELECT s.id AS source_id, kt.k, kt.kind, e.verdict, e.n, e.last_at,
+                   bs.csv AS backbones, s.trust
             FROM release_blocklist_entries e
-            JOIN release_blocklist_sources s ON s.id = e.source_id
-            LEFT JOIN release_blocklist_overrides o ON o.k = e.k
-            WHERE e.k IN (${placeholders})
+            JOIN release_blocklist_keys kt ON kt.id = e.key_id
+            JOIN release_blocklist_sources s ON s.rid = e.source_rid
+            JOIN release_blocklist_backbone_sets bs ON bs.id = e.backbones_id
+            LEFT JOIN release_blocklist_overrides o ON o.k = kt.k
+            WHERE kt.k IN (${placeholders})
               AND s.enabled = 1
               AND s.trust IN ('full','corroborate')
-              AND (o.k IS NULL OR e.source_id = ${LOCAL_SOURCE_ID})`
+              AND (o.k IS NULL OR s.id = ${LOCAL_SOURCE_ID})`
       );
       for (const row of rows) {
         const list = rowsByKey.get(row.k) ?? [];
@@ -226,7 +300,8 @@ export class ReleaseBlocklistRepository {
     if (!isValidReleaseKey(key)) return false;
     const row = await getDb().maybeOne(
       sql`SELECT 1 AS present FROM release_blocklist_entries
-          WHERE source_id = ${LOCAL_SOURCE_ID} AND k = ${key} LIMIT 1`
+          WHERE source_rid = ${sourceRidSql(LOCAL_SOURCE_ID)}
+            AND key_id = ${keyIdSql(key)} LIMIT 1`
     );
     return row !== null;
   }
@@ -251,10 +326,17 @@ export class ReleaseBlocklistRepository {
       await tx.exec(
         sql`DELETE FROM release_blocklist_overrides WHERE k = ${key}`
       );
-      const existing = await tx.maybeOne<EntryRow>(
-        sql`SELECT source_id, k, kind, verdict, n, last_at, backbones
-            FROM release_blocklist_entries
-            WHERE source_id = ${LOCAL_SOURCE_ID} AND k = ${key}`
+      const existing = await tx.maybeOne<{
+        verdict: string;
+        n: number | string;
+        last_at: number | string;
+        backbones: string;
+      }>(
+        sql`SELECT e.verdict, e.n, e.last_at, bs.csv AS backbones
+            FROM release_blocklist_entries e
+            JOIN release_blocklist_backbone_sets bs ON bs.id = e.backbones_id
+            WHERE e.source_rid = ${sourceRidSql(LOCAL_SOURCE_ID)}
+              AND e.key_id = ${keyIdSql(key)}`
       );
       const merged = existing
         ? {
@@ -272,14 +354,18 @@ export class ReleaseBlocklistRepository {
             lastAt: now,
             backbones: listToCsv(backbones),
           };
+      const keyIds = await internKeys(tx, [{ k: key, kind }]);
+      const bbIds = await internBackboneSets(tx, [merged.backbones]);
       await tx.exec(
-        sql`INSERT INTO release_blocklist_entries (source_id, k, kind, verdict, n, last_at, backbones)
-            VALUES (${LOCAL_SOURCE_ID}, ${key}, ${kind}, ${merged.verdict}, ${merged.n}, ${merged.lastAt}, ${merged.backbones})
-            ON CONFLICT (source_id, k) DO UPDATE SET
+        sql`INSERT INTO release_blocklist_entries (key_id, source_rid, verdict, n, last_at, backbones_id)
+            VALUES (${keyIds.get(key)}, ${sourceRidSql(LOCAL_SOURCE_ID)},
+                    ${merged.verdict}, ${merged.n}, ${merged.lastAt},
+                    ${bbIds.get(merged.backbones)})
+            ON CONFLICT (key_id, source_rid) DO UPDATE SET
               verdict = EXCLUDED.verdict,
               n = EXCLUDED.n,
               last_at = EXCLUDED.last_at,
-              backbones = EXCLUDED.backbones`
+              backbones_id = EXCLUDED.backbones_id`
       );
     });
     this.invalidatePresence();
@@ -295,8 +381,10 @@ export class ReleaseBlocklistRepository {
     await getDb().tx(async (tx) => {
       await tx.exec(
         sql`DELETE FROM release_blocklist_entries
-            WHERE source_id = ${LOCAL_SOURCE_ID} AND k = ${key}`
+            WHERE source_rid = ${sourceRidSql(LOCAL_SOURCE_ID)}
+              AND key_id = ${keyIdSql(key)}`
       );
+      await gcKeys(tx, key);
       await tx.exec(
         sql`INSERT INTO release_blocklist_overrides (k, created_at)
             VALUES (${key}, ${now})
@@ -324,22 +412,36 @@ export class ReleaseBlocklistRepository {
       throw new Error('payload contains no valid blocklist records');
     }
     await getDb().tx(async (tx) => {
+      const ridRow = await tx.maybeOne<{ rid: number | string }>(
+        sql`SELECT rid FROM release_blocklist_sources WHERE id = ${sourceId}`
+      );
+      if (!ridRow) throw new Error(`unknown blocklist source: ${sourceId}`);
+      const rid = num(ridRow.rid);
       await tx.exec(
-        sql`DELETE FROM release_blocklist_entries WHERE source_id = ${sourceId}`
+        sql`DELETE FROM release_blocklist_entries WHERE source_rid = ${rid}`
+      );
+      const keyIds = await internKeys(
+        tx,
+        valid.map((r) => ({ k: r.k, kind: releaseKeyKind(r.k)! }))
+      );
+      const bbIds = await internBackboneSets(
+        tx,
+        valid.map((r) => listToCsv(r.bk ?? []))
       );
       for (let i = 0; i < valid.length; i += INSERT_CHUNK_ROWS) {
         const chunk = valid.slice(i, i + INSERT_CHUNK_ROWS);
         const values = join(
           chunk.map(
             (r) =>
-              sql`(${sourceId}, ${r.k}, ${releaseKeyKind(r.k)}, ${r.v}, ${Math.min(N_CAP, Math.max(1, r.n))}, ${Math.max(0, r.at)}, ${listToCsv(r.bk ?? [])})`
+              sql`(${keyIds.get(r.k)}, ${rid}, ${r.v}, ${Math.min(N_CAP, Math.max(1, r.n))}, ${Math.max(0, r.at)}, ${bbIds.get(listToCsv(r.bk ?? []))})`
           )
         );
         await tx.exec(
-          sql`INSERT INTO release_blocklist_entries (source_id, k, kind, verdict, n, last_at, backbones)
+          sql`INSERT INTO release_blocklist_entries (key_id, source_rid, verdict, n, last_at, backbones_id)
               VALUES ${values}`
         );
       }
+      await gcKeys(tx);
     });
     this.invalidatePresence();
     return valid.length;
@@ -348,17 +450,34 @@ export class ReleaseBlocklistRepository {
   static async getSources(): Promise<BlocklistSource[]> {
     const rows = await getDb().query<SourceRow>(
       sql`SELECT ${SOURCE_COLUMNS},
-             (SELECT COUNT(*) FROM release_blocklist_entries e WHERE e.source_id = s.id) AS count
+             (SELECT COUNT(*) FROM release_blocklist_entries e WHERE e.source_rid = s.rid) AS count
           FROM release_blocklist_sources s
           ORDER BY CASE WHEN s.id = ${LOCAL_SOURCE_ID} THEN 0 ELSE 1 END, s.sort, s.name`
     );
     return rows.map(mapSource);
   }
 
+  /** Per source, how many of its keys no other source also lists. */
+  static async getSourceUniqueCounts(): Promise<Map<string, number>> {
+    const rows = await getDb().query<{
+      source_id: string;
+      unique_count: number | string;
+    }>(
+      sql`SELECT s.id AS source_id, COUNT(*) AS unique_count
+          FROM (SELECT MIN(source_rid) AS srid
+                FROM release_blocklist_entries
+                GROUP BY key_id
+                HAVING COUNT(*) = 1) t
+          JOIN release_blocklist_sources s ON s.rid = t.srid
+          GROUP BY s.id`
+    );
+    return new Map(rows.map((r) => [r.source_id, num(r.unique_count)]));
+  }
+
   static async getSource(id: string): Promise<BlocklistSource | undefined> {
     const row = await getDb().maybeOne<SourceRow>(
       sql`SELECT ${SOURCE_COLUMNS},
-             (SELECT COUNT(*) FROM release_blocklist_entries e WHERE e.source_id = s.id) AS count
+             (SELECT COUNT(*) FROM release_blocklist_entries e WHERE e.source_rid = s.rid) AS count
           FROM release_blocklist_sources s WHERE s.id = ${id}`
     );
     return row ? mapSource(row) : undefined;
@@ -426,16 +545,22 @@ export class ReleaseBlocklistRepository {
     if (id === LOCAL_SOURCE_ID) {
       throw new Error('the local source cannot be removed');
     }
-    await getDb().exec(
-      sql`DELETE FROM release_blocklist_sources WHERE id = ${id}`
-    );
+    await getDb().tx(async (tx) => {
+      await tx.exec(
+        sql`DELETE FROM release_blocklist_sources WHERE id = ${id}`
+      );
+      await gcKeys(tx);
+    });
     this.invalidatePresence();
   }
 
   static async clearSource(id: string): Promise<void> {
-    await getDb().exec(
-      sql`DELETE FROM release_blocklist_entries WHERE source_id = ${id}`
-    );
+    await getDb().tx(async (tx) => {
+      await tx.exec(
+        sql`DELETE FROM release_blocklist_entries WHERE source_rid = ${sourceRidSql(id)}`
+      );
+      await gcKeys(tx);
+    });
     this.invalidatePresence();
   }
 
@@ -464,10 +589,14 @@ export class ReleaseBlocklistRepository {
   }
 
   static async deleteLocalEntry(key: string): Promise<void> {
-    await getDb().exec(
-      sql`DELETE FROM release_blocklist_entries
-          WHERE source_id = ${LOCAL_SOURCE_ID} AND k = ${key}`
-    );
+    await getDb().tx(async (tx) => {
+      await tx.exec(
+        sql`DELETE FROM release_blocklist_entries
+            WHERE source_rid = ${sourceRidSql(LOCAL_SOURCE_ID)}
+              AND key_id = ${keyIdSql(key)}`
+      );
+      await gcKeys(tx, key);
+    });
     this.invalidatePresence();
   }
 
@@ -482,39 +611,47 @@ export class ReleaseBlocklistRepository {
     const filters: SqlFragment[] = [];
     if (params.search) {
       const escaped = params.search.replace(/[\\%_]/g, (c) => `\\${c}`);
-      filters.push(sql`e.k LIKE ${`%${escaped}%`} ESCAPE '\\'`);
+      filters.push(sql`kt.k LIKE ${`%${escaped}%`} ESCAPE '\\'`);
     }
-    if (params.sourceId) filters.push(sql`e.source_id = ${params.sourceId}`);
+    if (params.sourceId) {
+      filters.push(sql`e.source_rid = ${sourceRidSql(params.sourceId)}`);
+    }
     if (params.verdict) filters.push(sql`e.verdict = ${params.verdict}`);
-    if (params.kind) filters.push(sql`e.kind = ${params.kind}`);
+    if (params.kind) filters.push(sql`kt.kind = ${params.kind}`);
     const where =
       filters.length > 0
         ? sql`WHERE ${join(filters, ' AND ')}`
         : sql``;
 
     const total = await getDb().count(
-      sql`SELECT COUNT(DISTINCT e.k) FROM release_blocklist_entries e ${where}`
+      sql`SELECT COUNT(DISTINCT e.key_id)
+          FROM release_blocklist_entries e
+          JOIN release_blocklist_keys kt ON kt.id = e.key_id ${where}`
     );
-    const keyRows = await getDb().query<{ k: string }>(
-      sql`SELECT e.k, MAX(e.last_at) AS max_at
-          FROM release_blocklist_entries e ${where}
-          GROUP BY e.k
+    const keyRows = await getDb().query<{ key_id: number | string; k: string }>(
+      sql`SELECT e.key_id, kt.k, MAX(e.last_at) AS max_at
+          FROM release_blocklist_entries e
+          JOIN release_blocklist_keys kt ON kt.id = e.key_id ${where}
+          GROUP BY e.key_id, kt.k
           ORDER BY max_at DESC
           LIMIT ${params.limit} OFFSET ${params.offset}`
     );
     const keys = keyRows.map((r) => r.k);
     if (keys.length === 0) return { entries: [], total };
 
-    const placeholders = join(keys.map((k) => sql`${k}`));
+    const idPlaceholders = join(keyRows.map((r) => sql`${num(r.key_id)}`));
     const rows = await getDb().query<EntryRow>(
-      sql`SELECT e.source_id, e.k, e.kind, e.verdict, e.n, e.last_at, e.backbones,
-                 s.trust, s.name AS source_name
+      sql`SELECT s.id AS source_id, kt.k, kt.kind, e.verdict, e.n, e.last_at,
+                 bs.csv AS backbones, s.trust, s.name AS source_name
           FROM release_blocklist_entries e
-          JOIN release_blocklist_sources s ON s.id = e.source_id
-          WHERE e.k IN (${placeholders})`
+          JOIN release_blocklist_keys kt ON kt.id = e.key_id
+          JOIN release_blocklist_sources s ON s.rid = e.source_rid
+          JOIN release_blocklist_backbone_sets bs ON bs.id = e.backbones_id
+          WHERE e.key_id IN (${idPlaceholders})`
     );
     const overrideRows = await getDb().query<{ k: string }>(
-      sql`SELECT k FROM release_blocklist_overrides WHERE k IN (${placeholders})`
+      sql`SELECT k FROM release_blocklist_overrides
+          WHERE k IN (${join(keys.map((k) => sql`${k}`))})`
     );
     const overridden = new Set(overrideRows.map((r) => r.k));
 
@@ -558,11 +695,16 @@ export class ReleaseBlocklistRepository {
     let where = sql``;
     if (sourceIds && sourceIds.length > 0) {
       const placeholders = join(sourceIds.map((id) => sql`${id}`));
-      where = sql`WHERE source_id IN (${placeholders})`;
+      where = sql`WHERE e.source_rid IN
+        (SELECT rid FROM release_blocklist_sources WHERE id IN (${placeholders}))`;
     }
     const rows = await getDb().query<EntryRow>(
-      sql`SELECT source_id, k, kind, verdict, n, last_at, backbones
-          FROM release_blocklist_entries ${where}`
+      sql`SELECT s.id AS source_id, kt.k, kt.kind, e.verdict, e.n, e.last_at,
+                 bs.csv AS backbones
+          FROM release_blocklist_entries e
+          JOIN release_blocklist_keys kt ON kt.id = e.key_id
+          JOIN release_blocklist_sources s ON s.rid = e.source_rid
+          JOIN release_blocklist_backbone_sets bs ON bs.id = e.backbones_id ${where}`
     );
     const records = rows.map((row) => {
       const entry = mapEntry(row);
@@ -593,8 +735,10 @@ export class ReleaseBlocklistRepository {
   /** Distinct backbone root domains observed across all entries. */
   static async getDistinctBackbones(): Promise<string[]> {
     const rows = await getDb().query<{ backbones: string }>(
-      sql`SELECT DISTINCT backbones FROM release_blocklist_entries
-          WHERE backbones <> ''`
+      sql`SELECT DISTINCT bs.csv AS backbones
+          FROM release_blocklist_entries e
+          JOIN release_blocklist_backbone_sets bs ON bs.id = e.backbones_id
+          WHERE bs.csv <> ''`
     );
     const set = new Set<string>();
     for (const row of rows) {
@@ -606,7 +750,9 @@ export class ReleaseBlocklistRepository {
   /** Cheap change marker for export ETags. */
   static async getExportRevision(scope: 'local' | 'all'): Promise<string> {
     const where =
-      scope === 'local' ? sql`WHERE source_id = ${LOCAL_SOURCE_ID}` : sql``;
+      scope === 'local'
+        ? sql`WHERE source_rid = ${sourceRidSql(LOCAL_SOURCE_ID)}`
+        : sql``;
     const row = await getDb().maybeOne<{
       c: number | string;
       m: number | string;

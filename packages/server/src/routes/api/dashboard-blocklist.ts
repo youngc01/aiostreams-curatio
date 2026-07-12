@@ -96,10 +96,11 @@ function validateListUrl(url: string): string | null {
 }
 
 async function snapshot() {
-  const [sources, counts, observed] = await Promise.all([
+  const [sources, counts, observed, uniqueCounts] = await Promise.all([
     ReleaseBlocklistRepository.getSources(),
     ReleaseBlocklistRepository.getCounts(),
     ReleaseBlocklistRepository.getDistinctBackbones(),
+    ReleaseBlocklistRepository.getSourceUniqueCounts(),
   ]);
   const settings = appConfig.releaseBlocklist;
   return {
@@ -107,6 +108,7 @@ async function snapshot() {
     sources: sources.map((s) => ({
       ...s,
       url: s.url ? s.url.replace(/\?.*$/, '?…') : s.url,
+      uniqueCount: uniqueCounts.get(s.id) ?? 0,
     })),
     settings: {
       quorum: settings.quorum,
