@@ -1,11 +1,13 @@
 import React from 'react';
 import { toast } from 'sonner';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-} from '@tanstack/react-query';
-import { BiBlock, BiCheckShield, BiPlus, BiSearch, BiTrash } from 'react-icons/bi';
+  BiBlock,
+  BiCheckShield,
+  BiPlus,
+  BiSearch,
+  BiTrash,
+} from 'react-icons/bi';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { TextInput } from '@/components/ui/text-input';
@@ -20,7 +22,12 @@ import {
 } from '@/components/ui/pagination';
 import { cn } from '@/components/ui/core/styling';
 import { DashboardQueryBoundary } from '@/components/shared/dashboard-query-boundary';
+import {
+  ConfirmationDialog,
+  useConfirmationDialog,
+} from '@/components/shared/confirmation-dialog';
 import { api } from '@/lib/api';
+import { copyToClipboard } from '@/utils/clipboard';
 import {
   Badge,
   KIND_BADGE,
@@ -98,9 +105,7 @@ function EntriesView({
 
   const removeLocal = useMutation({
     mutationFn: (key: string) =>
-      api(
-        `DELETE /dashboard/blocklist/entries?key=${encodeURIComponent(key)}`
-      ),
+      api(`DELETE /dashboard/blocklist/entries?key=${encodeURIComponent(key)}`),
     onSuccess: () => {
       toast.success('Verdict removed');
       invalidate();
@@ -113,11 +118,19 @@ function EntriesView({
       api(
         `DELETE /dashboard/blocklist/overrides${key ? `?key=${encodeURIComponent(key)}` : ''}`
       ),
-    onSuccess: () => {
-      toast.success('Override cleared');
+    onSuccess: (_, key) => {
+      toast.success(key ? 'Override cleared' : 'All overrides cleared');
       invalidate();
     },
     onError: (e: any) => toast.error(e?.message ?? 'Failed'),
+  });
+
+  const confirmClearOverrides = useConfirmationDialog({
+    title: 'Clear all overrides',
+    description: `Re-block every release this instance has allowed (${snapshot.counts.overrides} override${snapshot.counts.overrides === 1 ? '' : 's'}). Their remote verdicts start filtering again.`,
+    actionText: 'Clear all',
+    actionIntent: 'alert-subtle',
+    onConfirm: () => clearOverride.mutate(undefined),
   });
 
   const data = entriesQuery.data;
@@ -178,7 +191,10 @@ function EntriesView({
           <Button
             size="sm"
             intent="gray-outline"
-            onClick={() => clearOverride.mutate(undefined)}
+            loading={
+              clearOverride.isPending && clearOverride.variables === undefined
+            }
+            onClick={confirmClearOverrides.open}
             title="Overrides suppress remote verdicts for releases this instance proved working"
           >
             Clear all overrides ({snapshot.counts.overrides})
@@ -232,10 +248,12 @@ function EntriesView({
                       <td
                         className="p-3 font-mono text-xs max-w-[260px] truncate cursor-pointer"
                         title={`${entry.key} (click to copy)`}
-                        onClick={() => {
-                          navigator.clipboard?.writeText(entry.key);
-                          toast.success('Key copied');
-                        }}
+                        onClick={() =>
+                          void copyToClipboard(entry.key, {
+                            onSuccess: () => toast.success('Key copied'),
+                            onError: () => toast.error('Copy failed'),
+                          })
+                        }
                       >
                         {entry.key}
                       </td>
@@ -414,6 +432,8 @@ function EntriesView({
         onOpenChange={setMarkOpen}
         invalidate={invalidate}
       />
+
+      <ConfirmationDialog {...confirmClearOverrides} />
     </div>
   );
 }
