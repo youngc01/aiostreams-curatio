@@ -77,6 +77,7 @@ router.get('/export', async (req, res, next) => {
     }
 
     const etag = `"${format}:${scope}:${revision}"`;
+    res.vary('Accept-Encoding');
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'no-cache');
     if (req.headers['if-none-match'] === etag) {
