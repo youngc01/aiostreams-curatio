@@ -11,28 +11,43 @@ import {
   PlaybackInfo,
   DebridError,
   TorrentDebridService,
+  UsenetDebridService,
 } from './base.js';
 import { buildResolveKey } from './utils.js';
 
 /**
- * Native Deepbrid (deepbrid.com) debrid service.
+ * Native Deepbrid (deepbrid.com) debrid service — torrents AND usenet.
  *
- * Deepbrid is a premium link generator with a torrent cloud. Unlike RD/AD/etc.
- * it has NO infoHash cache-check endpoint and its torrent links come back
+ * Deepbrid is a premium link generator with a torrent + usenet cloud. Unlike
+ * RD/AD/etc. it has NO cache-check endpoint and its links come back
  * already-direct (no unrestrict step), so this service:
- *   - reports every magnet as uncached (checkMagnets), letting resolve() add+poll;
- *   - resolves by POST /torrents/add -> poll GET /torrents/info -> pick the video
+ *   - reports every magnet/nzb as cached (checkMagnets/checkNzbs) so results are
+ *     shown and survive cached-only filters — Deepbrid has no availability
+ *     indicator, and resolve() performs the real add + poll on play regardless;
+ *   - resolves torrents by POST /torrents/add and usenet by POST /usenet/add
+ *     (nzb_url), then polls GET /torrents/info until ready and picks the video
  *     file's already-direct link.
  *
+ * Because Deepbrid is download-first (never instantly available), resolve()
+ * always runs the add + poll flow, ignoring the caller's cacheAndPlay flag.
+ *
  * Ported in spirit from Cxsmo-ai/Deepbridge (Apache-2.0); see NOTICE-CURATIO.md.
- * Field names (`add.id`, torrents/info `status`/`links`) should be verified
- * against the live API — see https://www.deepbrid.com/api-docs.
+ * Field names (`add.id`, torrents/info `status`/`links`, the usenet status
+ * endpoint) should be verified against the live API — see
+ * https://www.deepbrid.com/api-docs.
  */
 
 const logger = createLogger('debrid:deepbrid');
 const BASE_URL = 'https://www.deepbrid.com/api/v1';
 const VIDEO_RE = /\.(mkv|mp4|m4v|avi|mov|ts|m2ts|webm)(?:$|[?#])/i;
-const READY_STATUSES = new Set(['ready', 'ready_missing_links', 'finished']);
+const READY_STATUSES = new Set([
+  'ready',
+  'ready_missing_links',
+  'finished',
+  'completed',
+  'done',
+  'success',
+]);
 
 interface DeepbridLink {
   url?: string;
@@ -132,9 +147,11 @@ function selectLink(
   return (video ?? files[0]).link;
 }
 
-export class DeepbridService implements TorrentDebridService {
+export class DeepbridService
+  implements TorrentDebridService, UsenetDebridService
+{
   readonly serviceName: ServiceId = 'deepbrid';
-  readonly capabilities = { torrents: true, usenet: false };
+  readonly capabilities = { torrents: true, usenet: true };
   private readonly pollInterval: number;
   private readonly maxWaitTime: number;
 
@@ -180,12 +197,13 @@ export class DeepbridService implements TorrentDebridService {
     });
   }
 
-  // Deepbrid has no batch cache-check. Report uncached so resolve() runs add+poll.
+  // Deepbrid has no cache-check. Report cached so results are shown and pass
+  // cached-only filters; resolve() still performs the real add + poll on play.
   async checkMagnets(magnets: string[]): Promise<DebridDownload[]> {
     return magnets.map((magnet) => ({
       id: -1,
       hash: extractHash(magnet),
-      status: 'unknown' as const,
+      status: 'cached' as const,
     }));
   }
 
@@ -234,13 +252,78 @@ export class DeepbridService implements TorrentDebridService {
     return link;
   }
 
+  // ---- Usenet ----------------------------------------------------------------
+  // Deepbrid resolves NZBs the same way it resolves magnets: submit the NZB URL
+  // (POST /usenet/add), then poll the shared status endpoint for the direct
+  // link. It has no cache-check, so checkNzbs reports cached (see checkMagnets).
+
+  async checkNzbs(
+    nzbs: { name?: string; hash?: string }[]
+  ): Promise<DebridDownload[]> {
+    return nzbs.map((nzb) => ({
+      id: -1,
+      hash: nzb.hash,
+      status: 'cached' as const,
+    }));
+  }
+
+  async addNzb(nzb: string, _name: string): Promise<DebridDownload> {
+    const body = await this.api('/usenet/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ nzb_url: nzb }).toString(),
+    });
+    const id = body?.add?.id ?? body?.usenet?.id ?? body?.id;
+    if (id == null) throw this.toError(502, 'Bad Gateway', body);
+    return { id: String(id), status: 'processing' };
+  }
+
+  // Deepbrid exposes usenet items through the same /torrents/info status
+  // endpoint as torrents. If a future API split moves them under /downloads,
+  // adjust getNzb / listNzbs / removeNzb here.
+  async getNzb(nzbId: string): Promise<DebridDownload> {
+    return this.getMagnet(nzbId);
+  }
+
+  async listNzbs(): Promise<DebridDownload[]> {
+    return this.listMagnets();
+  }
+
+  async removeNzb(nzbId: string): Promise<void> {
+    return this.removeMagnet(nzbId);
+  }
+
+  // Usenet links are already direct; resolve() returns them straight from the
+  // status endpoint. This only surfaces a link for an already-known id.
+  async generateUsenetLink(downloadId: string): Promise<string> {
+    const item = await this.getNzb(downloadId);
+    const link = (item.files ?? []).find((f) => f.link)?.link;
+    if (!link) {
+      throw new DebridError('No Deepbrid usenet link available', {
+        statusCode: 400,
+        statusText: 'No matching file',
+        code: 'NO_MATCHING_FILE',
+        headers: {},
+        body: item,
+        type: 'api_error',
+      });
+    }
+    return link;
+  }
+
+  // ---- Resolve (torrent + usenet) --------------------------------------------
+
   async resolve(
     playbackInfo: PlaybackInfo,
     filename: string,
     cacheAndPlay: boolean,
     autoRemoveDownloads?: boolean
   ): Promise<string | undefined> {
-    if (playbackInfo.type !== 'torrent') return undefined;
+    if (playbackInfo.type !== 'torrent' && playbackInfo.type !== 'usenet') {
+      return undefined;
+    }
+    // Deepbrid is download-first (no cache-check, no instant link), so a
+    // playback is always an add + poll regardless of the caller's cacheAndPlay.
     const { result } = await DistributedLock.getInstance().withLock(
       buildResolveKey(
         'db:lock',
@@ -251,35 +334,40 @@ export class DeepbridService implements TorrentDebridService {
         this.config.clientIp,
         { cacheAndPlay, autoRemoveDownloads }
       ),
-      () => this._resolve(playbackInfo, filename, cacheAndPlay, autoRemoveDownloads),
+      () => this._resolve(playbackInfo, filename, autoRemoveDownloads),
       {
-        timeout: cacheAndPlay ? this.maxWaitTime + this.pollInterval : 30000,
-        ttl: cacheAndPlay ? this.maxWaitTime + this.pollInterval + 10000 : 40000,
+        timeout: this.maxWaitTime + this.pollInterval,
+        ttl: this.maxWaitTime + this.pollInterval + 10000,
       }
     );
     return result;
   }
 
   private async _resolve(
-    playbackInfo: PlaybackInfo & { type: 'torrent' },
+    playbackInfo: PlaybackInfo,
     filename: string,
-    cacheAndPlay: boolean,
     autoRemoveDownloads?: boolean
   ): Promise<string | undefined> {
-    const added = await this.addMagnet(buildMagnet(playbackInfo));
-    let item = await this.getMagnet(String(added.id));
+    const type = playbackInfo.type;
+    const added =
+      playbackInfo.type === 'usenet'
+        ? await this.addNzb(playbackInfo.nzb, filename)
+        : await this.addMagnet(buildMagnet(playbackInfo));
+    const id = String(added.id);
+    const getItem = () =>
+      type === 'usenet' ? this.getNzb(id) : this.getMagnet(id);
+    let item = await getItem();
 
     if (!isReady(item)) {
-      if (!cacheAndPlay) return undefined;
       const maxPolls = Math.ceil(this.maxWaitTime / this.pollInterval);
       for (let i = 0; i < maxPolls; i++) {
         await sleep(this.pollInterval);
-        item = await this.getMagnet(String(added.id));
+        item = await getItem();
         if (isReady(item)) break;
         if (item.status === 'failed' || item.status === 'invalid') {
-          throw new DebridError(`Deepbrid torrent ${item.status}`, {
+          throw new DebridError(`Deepbrid ${type} ${item.status}`, {
             statusCode: 400,
-            statusText: `Deepbrid torrent ${item.status}`,
+            statusText: `Deepbrid ${type} ${item.status}`,
             code: 'UNKNOWN',
             headers: {},
             body: item,
@@ -289,7 +377,7 @@ export class DeepbridService implements TorrentDebridService {
       }
       if (!isReady(item)) {
         throw new DebridError(
-          `Deepbrid torrent timed out waiting for completion (status: ${item.status})`,
+          `Deepbrid ${type} timed out waiting for completion (status: ${item.status})`,
           {
             statusCode: 408,
             statusText: 'Timeout',
@@ -304,7 +392,7 @@ export class DeepbridService implements TorrentDebridService {
 
     const link = selectLink(item, playbackInfo, filename);
     if (!link) {
-      throw new DebridError('No playable file in Deepbrid torrent', {
+      throw new DebridError(`No playable file in Deepbrid ${type}`, {
         statusCode: 400,
         statusText: 'No matching file',
         code: 'NO_MATCHING_FILE',
@@ -315,7 +403,10 @@ export class DeepbridService implements TorrentDebridService {
     }
 
     if (autoRemoveDownloads && item.id) {
-      this.removeMagnet(String(item.id)).catch(() => {});
+      (type === 'usenet'
+        ? this.removeNzb(String(item.id))
+        : this.removeMagnet(String(item.id))
+      ).catch(() => {});
     }
     return link;
   }

@@ -32,6 +32,7 @@ export class EasynewsSearchPreset extends BuiltinAddonPreset {
     const supportedResources = [constants.STREAM_RESOURCE];
     const supportedServices = [
       constants.TORBOX_SERVICE,
+      constants.DEEPBRID_SERVICE, // curatio: Deepbrid resolves usenet natively
       constants.NZBDAV_SERVICE,
       constants.ALTMOUNT_SERVICE,
       constants.STREMIO_NNTP_SERVICE,

@@ -292,6 +292,7 @@ export abstract class BaseDebridAddon<T extends BaseDebridConfig> {
         'stremio_nntp',
         'stremthru_newz',
         'aiostreams',
+        'deepbrid', // curatio: Deepbrid resolves NZBs natively (POST /usenet/add)
       ].includes(s.id)
     );
 
