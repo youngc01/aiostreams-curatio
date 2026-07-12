@@ -383,8 +383,11 @@ const SERVICE_DETAILS: Record<
   [DEEPBRID_SERVICE]: {
     id: DEEPBRID_SERVICE,
     name: 'Deepbrid',
-    shortName: 'DB',
-    knownNames: ['DB', 'Deepbrid', 'DeepBrid', 'deepbrid'],
+    // curatio: 'DB' is deliberately avoided — Debrider already claims it in its
+    // knownNames, and parseServiceFromString would mis-attribute Deepbrid
+    // streams to Debrider. 'DPB' is distinct and matching is case-insensitive.
+    shortName: 'DPB',
+    knownNames: ['DPB', 'Deepbrid'],
     signUpText:
       "Don't have an account? [Sign up here](https://www.deepbrid.com/).",
     credentials: [
