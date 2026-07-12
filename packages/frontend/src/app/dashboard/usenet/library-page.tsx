@@ -315,7 +315,7 @@ function EntryActions({
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <Button
         size="sm"
         intent="gray-outline"
@@ -731,138 +731,134 @@ export function UsenetLibraryPage() {
     <div className="space-y-4 overflow-x-hidden">
       <AddNzb />
 
-      {/* Toolbar: stacks on mobile (search, status, sort each on their own
-          row, then view-toggle + select controls share a row), collapses to a
-          single row from `sm` up. The search grows to fill; everything else is
-          fixed-width so there's no dead space. Widths/flex live on `fieldClass`
-          because that's the actual flex child — the `BasicField` wrapper — and
-          the input/trigger inside it already carry `w-full`. */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
         <TextInput
           leftIcon={<BiSearch />}
           placeholder="Search by name…"
           value={searchInput}
           onValueChange={setSearchInput}
-          fieldClass="sm:flex-1 sm:min-w-0"
+          fieldClass="lg:flex-1 lg:min-w-0"
         />
-        <Select
-          value={status}
-          options={STATUS_OPTIONS}
-          onValueChange={(v) => setStatus(v as LibraryStatus | 'all')}
-          fieldClass="sm:w-36 sm:shrink-0"
-        />
-        {/* Sort criterion + a direction toggle (asc/desc). */}
-        <div className="flex items-stretch gap-2 sm:shrink-0">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:shrink-0">
           <Select
-            value={sortField}
-            options={SORT_FIELD_OPTIONS}
-            onValueChange={(v) => onSortFieldChange(v as LibrarySort)}
-            fieldClass="sm:w-40"
+            value={status}
+            options={STATUS_OPTIONS}
+            onValueChange={(v) => setStatus(v as LibraryStatus | 'all')}
+            fieldClass="sm:w-36 sm:flex-auto lg:flex-none"
           />
-          <Tooltip
-            trigger={
-              <IconButton
-                size="md"
-                intent="gray-outline"
-                icon={sortDir === 'asc' ? <BiSortUp /> : <BiSortDown />}
-                aria-label={sortDir === 'asc' ? 'Ascending' : 'Descending'}
-                onClick={() =>
-                  setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-                }
-              />
-            }
-          >
-            {sortDir === 'asc' ? 'Ascending' : 'Descending'}
-          </Tooltip>
-        </div>
-        <div className="flex items-center justify-between gap-2 sm:justify-start sm:shrink-0">
-          <div className="hidden sm:block">
-            <ViewToggle value={view} onChange={setViewPersisted} />
+          {/* Sort criterion + a direction toggle (asc/desc). */}
+          <div className="flex items-stretch gap-2 sm:flex-auto lg:flex-none">
+            <Select
+              value={sortField}
+              options={SORT_FIELD_OPTIONS}
+              onValueChange={(v) => onSortFieldChange(v as LibrarySort)}
+              fieldClass="sm:w-40 sm:flex-auto lg:flex-none"
+            />
+            <Tooltip
+              trigger={
+                <IconButton
+                  size="md"
+                  intent="gray-outline"
+                  icon={sortDir === 'asc' ? <BiSortUp /> : <BiSortDown />}
+                  aria-label={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+                  onClick={() =>
+                    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                  }
+                />
+              }
+            >
+              {sortDir === 'asc' ? 'Ascending' : 'Descending'}
+            </Tooltip>
           </div>
-          <div className="flex items-center gap-1.5">
-            {selectMode ? (
-              <>
-                <span className="text-xs text-[--muted] tabular-nums">
-                  {selected.size} selected
-                </span>
-                <Tooltip
-                  trigger={
-                    <IconButton
-                      size="md"
-                      intent="gray-subtle"
-                      icon={
-                        allSelected ? <BiCheckbox /> : <BiCheckboxChecked />
-                      }
-                      aria-label={
-                        allSelected ? 'Clear selection' : 'Select all'
-                      }
-                      disabled={entries.length === 0}
-                      onClick={toggleSelectAll}
-                    />
-                  }
-                >
-                  {allSelected ? 'Clear selection' : 'Select all'}
-                </Tooltip>
-                <Tooltip
-                  trigger={
-                    <IconButton
-                      size="md"
-                      intent="alert-subtle"
-                      icon={<BiTrash />}
-                      aria-label="Delete selected"
-                      disabled={selected.size === 0}
-                      onClick={onDeleteSelected}
-                    />
-                  }
-                >
-                  Delete selected
-                </Tooltip>
-                <Tooltip
-                  trigger={
-                    <IconButton
-                      size="md"
-                      intent="gray-outline"
-                      icon={<BiX />}
-                      aria-label="Done selecting"
-                      onClick={exitSelect}
-                    />
-                  }
-                >
-                  Done
-                </Tooltip>
-              </>
-            ) : (
-              <>
-                <Tooltip
-                  trigger={
-                    <IconButton
-                      size="md"
-                      intent="alert-subtle"
-                      icon={<BiTrash />}
-                      aria-label="Delete all entries"
-                      loading={delAll.isPending}
-                      onClick={confirmDeleteAll.open}
-                    />
-                  }
-                >
-                  Delete all
-                </Tooltip>
-                <Tooltip
-                  trigger={
-                    <IconButton
-                      size="md"
-                      intent="gray-outline"
-                      icon={<BiSelectMultiple />}
-                      aria-label="Select entries"
-                      disabled={entries.length === 0}
-                      onClick={() => setSelectMode(true)}
-                    />
-                  }
-                >
-                  Select
-                </Tooltip>
-              </>
-            )}
+          <div className="flex items-center justify-between gap-2 sm:justify-start sm:shrink-0">
+            <div className="hidden sm:block">
+              <ViewToggle value={view} onChange={setViewPersisted} />
+            </div>
+            <div className="flex items-center gap-1.5">
+              {selectMode ? (
+                <>
+                  <span className="text-xs text-[--muted] tabular-nums">
+                    {selected.size} selected
+                  </span>
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="md"
+                        intent="gray-subtle"
+                        icon={
+                          allSelected ? <BiCheckbox /> : <BiCheckboxChecked />
+                        }
+                        aria-label={
+                          allSelected ? 'Clear selection' : 'Select all'
+                        }
+                        disabled={entries.length === 0}
+                        onClick={toggleSelectAll}
+                      />
+                    }
+                  >
+                    {allSelected ? 'Clear selection' : 'Select all'}
+                  </Tooltip>
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="md"
+                        intent="alert-subtle"
+                        icon={<BiTrash />}
+                        aria-label="Delete selected"
+                        disabled={selected.size === 0}
+                        onClick={onDeleteSelected}
+                      />
+                    }
+                  >
+                    Delete selected
+                  </Tooltip>
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="md"
+                        intent="gray-outline"
+                        icon={<BiX />}
+                        aria-label="Done selecting"
+                        onClick={exitSelect}
+                      />
+                    }
+                  >
+                    Done
+                  </Tooltip>
+                </>
+              ) : (
+                <>
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="md"
+                        intent="alert-subtle"
+                        icon={<BiTrash />}
+                        aria-label="Delete all entries"
+                        loading={delAll.isPending}
+                        onClick={confirmDeleteAll.open}
+                      />
+                    }
+                  >
+                    Delete all
+                  </Tooltip>
+                  <Tooltip
+                    trigger={
+                      <IconButton
+                        size="md"
+                        intent="gray-outline"
+                        icon={<BiSelectMultiple />}
+                        aria-label="Select entries"
+                        disabled={entries.length === 0}
+                        onClick={() => setSelectMode(true)}
+                      />
+                    }
+                  >
+                    Select
+                  </Tooltip>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -879,7 +875,7 @@ export function UsenetLibraryPage() {
             <div
               className={cn(
                 effectiveView === 'grid'
-                  ? 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3'
+                  ? 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 3xl:grid-cols-5'
                   : 'flex flex-col gap-2'
               )}
             >
