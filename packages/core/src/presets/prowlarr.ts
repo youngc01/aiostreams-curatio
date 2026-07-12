@@ -8,7 +8,6 @@ import {
   constants,
   createLogger,
 } from '../utils/index.js';
-import { StremThruPreset } from './stremthru.js';
 import { BuiltinAddonPreset } from './builtin.js';
 import { ProwlarrAddon } from '../builtins/index.js';
 
@@ -16,7 +15,7 @@ export class ProwlarrPreset extends BuiltinAddonPreset {
   static override get METADATA() {
     const supportedResources = [constants.STREAM_RESOURCE];
     const supportedServices: ServiceId[] = [
-      ...StremThruPreset.supportedServices,
+      ...BuiltinAddonPreset.torrentServices,
       constants.NZBDAV_SERVICE,
       constants.ALTMOUNT_SERVICE,
       constants.STREMIO_NNTP_SERVICE,

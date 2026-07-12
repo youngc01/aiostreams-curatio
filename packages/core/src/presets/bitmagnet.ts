@@ -1,6 +1,5 @@
 ﻿import { Option, UserData } from '../db/index.js';
 import { appConfig, constants } from '../utils/index.js';
-import { StremThruPreset } from './stremthru.js';
 import { TorznabPreset } from './torznab.js';
 
 export class BitmagnetPreset extends TorznabPreset {
@@ -53,7 +52,7 @@ export class BitmagnetPreset extends TorznabPreset {
         type: 'multi-select',
         required: false,
         showInSimpleMode: false,
-        options: StremThruPreset.supportedServices.map((service) => ({
+        options: TorznabPreset.torrentServices.map((service) => ({
           value: service,
           label: constants.SERVICE_DETAILS[service].name,
         })),
@@ -89,7 +88,7 @@ export class BitmagnetPreset extends TorznabPreset {
         appConfig.builtins.bitmagnet.timeout ??
         appConfig.presets.defaultTimeout,
       USER_AGENT: appConfig.http.defaultUserAgent,
-      SUPPORTED_SERVICES: StremThruPreset.supportedServices,
+      SUPPORTED_SERVICES: TorznabPreset.torrentServices,
       DESCRIPTION:
         'An addon to get debrid results from Bitmagnet, a self-hosted BitTorrent indexer and DHT crawler.',
       OPTIONS: options,
