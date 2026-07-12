@@ -5,6 +5,7 @@ export * from './torbox.js';
 export * from './nzbdav.js';
 export * from './altmount.js';
 export * from './aiostreams.js';
+export * from './deepbrid.js';
 
 import {
   appConfig,
@@ -22,6 +23,7 @@ import { AltmountService } from './altmount.js';
 import { StremioNNTPService } from './stremio-nntp.js';
 import { EasynewsService } from './easynews.js';
 import { NativeUsenetService } from './aiostreams.js';
+import { DeepbridService } from './deepbrid.js';
 
 export function getDebridService(
   serviceName: ServiceId,
@@ -82,6 +84,12 @@ export function getDebridService(
       return createStremThruNewzService(config, pollInterval, maxWaitTime);
     case constants.AIOSTREAMS_SERVICE:
       return new NativeUsenetService(config);
+    case 'deepbrid':
+      // curatio: native Deepbrid — resolved via Deepbrid's own API, not StremThru.
+      return new DeepbridService(config, {
+        pollInterval,
+        maxWaitTime,
+      });
     default:
       if (StremThruPreset.supportedServices.includes(serviceName)) {
         return new StremThruService({
