@@ -122,23 +122,50 @@ tag → tags `main`, `latest`, `v*`, `<sha>`.
 > Deploy with **Curatio's** `docker-compose.yml` (it defines the internal-only `aiostreams` service),
 > **not** this repo's `compose.yaml`.
 
-### Runtime env (Curatio's compose sets these on the `aiostreams` service)
+### Runtime env for a Curatio-managed instance
 
-| Env | Value | Notes |
+When this image runs as Curatio's bundled, internal AIOStreams (single operator, every config created
+by Curatio), run it with the env below. Curatio's `docker-compose.yml` sets all of these; they're
+listed here so a fresh deploy has them from the start.
+
+| Env | Value | Why |
 |---|---|---|
-| `BASE_URL` | `http://aiostreams:3000` (or `AIOSTREAMS_PUBLIC_URL`) | internal only; never exposed to clients |
-| `SECRET_KEY` | 64-hex | **immutable after first run** (encrypts stored configs) |
-| `DATABASE_URI` | `sqlite:////app/data/db.sqlite` | self-contained; volume `aiostreams_data` |
+| `BASE_URL` | internal origin, e.g. `http://aiostreams:3000` (or `AIOSTREAMS_PUBLIC_URL`) | internal only; never exposed to clients |
+| `SECRET_KEY` | 64-hex | **immutable after first run** — encrypts stored configs |
+| `DATABASE_URI` | `sqlite:////app/data/db.sqlite` | self-contained; back up the volume (`aiostreams_data`) |
 | `INTERNAL_URL` | `http://aiostreams:3000` | |
 | `PORT` | `3000` | |
-| `AIOSTREAMS_AUTH` | `user:pass` | operator credential for the instance; enforced when `AIOSTREAMS_AUTH_REQUIRED=true` |
-| `AIOSTREAMS_AUTH_REQUIRED` | **`true`** | locks the config API |
-| `CONFIG_ACCESS_KEY` | random secret | Curatio stamps `config.accessKey` on every create/update so the write gate passes |
+| `AIOSTREAMS_AUTH` | `user:pass` | instance operator credential (dashboard / config API); enforced when `AIOSTREAMS_AUTH_REQUIRED=true` |
+| `AIOSTREAMS_AUTH_REQUIRED` | **`true`** | gate config writes (locks the config API) |
+| `CONFIG_ACCESS_KEY` | shared secret | must **equal** Curatio's `AIOSTREAMS_CONFIG_ACCESS_KEY`; Curatio stamps `config.accessKey` so `POST`/`PUT /api/v1/user` passes the write gate |
+| `REGEX_FILTER_ACCESS` | **`all`** | Curatio owns every config; without this, configs that sync regex from external URLs (Tamtaro/Vidhin) fail creation |
+| `SEL_SYNC_ACCESS` | **`all`** | same, for Stream Expression Language (SEL) sync URLs |
 
-> **Changed from the previous docs:** run with `AIOSTREAMS_AUTH_REQUIRED=true` **and** a
-> `CONFIG_ACCESS_KEY` (Curatio stamps it) — do **not** leave `AIOSTREAMS_AUTH_REQUIRED` unset. The
-> built-in proxy stays **off**: Curatio does debrid IP-limit consolidation with its own byte proxy, so
-> no `proxy.id: "builtin"` is needed and the instance needs no public exposure.
+> The built-in proxy stays **off**: Curatio does debrid IP-limit consolidation with its own byte proxy,
+> so no `proxy.id: "builtin"` is needed and the instance needs no public exposure.
+
+#### The two that bite you if missing
+
+- **`REGEX_FILTER_ACCESS=all` + `SEL_SYNC_ACCESS=all`.** The default is `trusted`, which only allows a
+  whitelist of regex/SEL sync URLs for non-trusted configs. Curatio-created configs are "non-trusted,"
+  so seeding a config that references synced regex/SEL URLs 400s with:
+  > `Invalid config for new user: Forbidden URL(s) in regex configuration: https://…`
+
+  Setting both to `all` is correct here because the operator controls every config (there are no
+  untrusted public users). For a public multi-user instance you'd keep `trusted` + a whitelist instead.
+
+- **`AIOSTREAMS_AUTH_REQUIRED=true` + a matching `CONFIG_ACCESS_KEY`.** Curatio stamps the access key
+  into every config it creates/updates. If the key doesn't match (or the gate is off), config writes
+  are rejected. Keep the same value on both sides.
+
+#### Credential-free seeding (no fork change needed)
+
+AIOStreams correctly validates the **required credentials of enabled services and presets at config
+creation** — e.g. an enabled `torbox` service or a `debridio` scraper preset with no key fails with
+`Option apiKey is required, got undefined`. Curatio handles this on its side (`prepare_seed_config`
+disables keyless-enabled services and drops key-required presets before seeding, then adds keys via its
+Keys form). So this image needs no change — it validates as normal; just be aware that a raw
+credential-free config posted directly (outside Curatio) will be rejected, by design.
 
 ### Config-API contract Curatio depends on
 
