@@ -3,8 +3,8 @@
 A fork of **[Viren070/AIOStreams](https://github.com/Viren070/AIOStreams)** (GPL-3.0, pinned at
 `v2.30.6`) that adds a **native Deepbrid debrid service**. Curatio bundles this image, keeps it
 **fully internal**, and manages it as **two profiles**, each an AIOStreams user config with a stable
-stream URL. **Debrid keys are entered in AIOStreams' own `/configure` UI and live inside each config —
-Curatio never stores them.** See `NOTICE-CURATIO.md` for licensing/attribution.
+stream URL. **Debrid keys are set through a Curatio-native form and saved to each config over the
+AIOStreams config API — Curatio never stores them.** See `NOTICE-CURATIO.md` for licensing/attribution.
 
 > **Build gate:** the monorepo requires **Node 24** + **pnpm 11**. Don't rely on local typechecking
 > below Node 24 — the GitHub Actions workflow `.github/workflows/curatio-publish.yml` builds the full
@@ -99,13 +99,13 @@ Runtime env is set by Curatio's compose on the internal `aiostreams` service —
 
 ---
 
-## 4. Curatio integration (configure-first)
+## 4. Curatio integration (config-API native)
 
 Curatio bundles this image, keeps it **fully internal**, and manages it as **two profiles**
 ("Low Bandwidth" / "High Bandwidth"), each an AIOStreams user config with a stable stream URL. Curatio
-seeds the two configs, serves their streams, and reverse-proxies AIOStreams' own `/configure` UI behind
-admin auth so an operator edits a profile in place. **Debrid keys are entered in `/configure` and live
-inside each AIOStreams config — Curatio never stores them.**
+seeds the two configs, serves their streams, and edits each profile in place over the AIOStreams config
+API. AIOStreams' own `/configure` UI is **not** used or exposed. **Debrid keys are set through a
+Curatio-native form and live inside each AIOStreams config — Curatio never stores them.**
 
 ### Image
 
@@ -131,7 +131,7 @@ tag → tags `main`, `latest`, `v*`, `<sha>`.
 | `DATABASE_URI` | `sqlite:////app/data/db.sqlite` | self-contained; volume `aiostreams_data` |
 | `INTERNAL_URL` | `http://aiostreams:3000` | |
 | `PORT` | `3000` | |
-| `AIOSTREAMS_AUTH` | `user:pass` | Curatio sends this as Basic auth on the `/configure` reverse-proxy |
+| `AIOSTREAMS_AUTH` | `user:pass` | operator credential for the instance; enforced when `AIOSTREAMS_AUTH_REQUIRED=true` |
 | `AIOSTREAMS_AUTH_REQUIRED` | **`true`** | locks the config API |
 | `CONFIG_ACCESS_KEY` | random secret | Curatio stamps `config.accessKey` on every create/update so the write gate passes |
 
@@ -154,40 +154,32 @@ across upstream rebases:
 Stream URL Curatio builds and serves to clients:
 `{BASE_URL}/stremio/{uuid}/{encryptedPassword}/stream/{type}/{id}.json`.
 
-### Operator flow (new server)
+### Operator flow (no debrid keys in Curatio)
 
 ```bash
 git clone <curatio> && cd curatio
 ./scripts/setup.sh          # generates POSTGRES_PASSWORD, SECRET_KEY, AIOSTREAMS_SECRET_KEY,
                             # AIOSTREAMS_CONFIG_ACCESS_KEY, AIOSTREAMS_AUTH
-# then fill in .env: TMDB_API_KEY, GEMINI_API_KEY, BASE_URL, MASTER_PASSWORD
+# fill in .env: TMDB_API_KEY, GEMINI_API_KEY, BASE_URL, MASTER_PASSWORD
 docker compose up -d
 ```
 
 Then in **/admin → Streaming (AIOStreams)**:
 
-1. **Seed profiles** — creates the two AIOStreams configs from the bundled SEL templates and stores
-   their stream URLs.
-2. **Edit** a profile — opens the reverse-proxied `/configure`; enter Deepbrid (+ RealDebrid / TorBox /
-   Premiumize) keys and adjust filters/sorting → **Save**. Edits are live; the stream URL never changes.
-3. **Update preset** (optional) — roll a new SEL baseline into a profile; Curatio reads the live config,
-   merges the operator's debrid keys into the new baseline, and PUTs it back (same URL, keys preserved).
-4. **Route playback through server** toggle — on: all debrid playback egresses from the server's IP
-   (one IP for debrid IP-limits); off: viewers stream directly.
+1. **Seed profiles** — creates the two AIOStreams configs from the bundled SEL templates and
+   stores their stream URLs.
+2. **Keys** — a Curatio-native form to set each debrid API key (Deepbrid / RealDebrid / TorBox /
+   Premiumize) and toggle it on. Saved straight to the profile's live AIOStreams config via the
+   config API; the stream URL never changes. Curatio never stores the keys.
+3. **Advanced** — a raw-JSON editor over the profile's full live config for filters/sorting and
+   any non-debrid service (e.g. StremThru). **Update preset** still ships a new SEL baseline while
+   preserving the live debrid keys.
+4. **Route playback through server** toggle — on: all debrid playback egresses from the server's
+   IP (one IP for debrid IP-limits); off: viewers stream directly.
 
-### `/configure` under a subpath (confirm on a running instance)
-
-Curatio proxies `{CURATIO_ORIGIN}/admin/aiostreams/{tier}/configure/…` → internal
-`/stremio/{uuid}/{encryptedPassword}/configure/…`. For the `/configure` SPA's assets and `/api/v1/*`
-calls to resolve under that admin subpath, either:
-
-- **(a)** confirm this build honors a URL base-path in `BASE_URL` (check
-  `packages/core/src/config/bootstrap.ts` + the frontend base-href / API-base wiring) and set
-  `BASE_URL={CURATIO_ORIGIN}/admin/aiostreams/{tier}/configure`; or
-- **(b)** serve `/configure` on a dedicated internal subdomain and point the admin "Edit" link there.
-
-Seeding and Deepbrid stream resolution work regardless of this — it only affects the in-place
-config-editing UI.
+> Curatio edits AIOStreams entirely over its config API (`GET`/`PUT /api/v1/user`, uuid/password +
+> `CONFIG_ACCESS_KEY`). AIOStreams' own `/configure` UI is **not** used or exposed — the instance
+> stays fully internal and Curatio is the only public origin.
 
 ---
 
