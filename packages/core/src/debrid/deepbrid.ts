@@ -32,8 +32,8 @@ import { buildResolveKey } from './utils.js';
  * always runs the add + poll flow, ignoring the caller's cacheAndPlay flag.
  *
  * Ported in spirit from Cxsmo-ai/Deepbridge (Apache-2.0); see NOTICE-CURATIO.md.
- * Field names (`add.id`, torrents/info `status`/`links`, the usenet status
- * endpoint) should be verified against the live API — see
+ * Field names (`add.id`, torrents/info `progress`/`error`/`links`, the usenet
+ * status endpoint) should be verified against the live API — see
  * https://www.deepbrid.com/api-docs.
  */
 
@@ -61,9 +61,11 @@ interface DeepbridTorrent {
   hash?: string;
   name?: string;
   filename?: string;
-  status?: string;
+  status?: string; // kept as a forward-compatible fallback; not present on today's API
   size?: number;
-  progress?: number;
+  progress?: number; // 0–100 — the real readiness signal
+  error?: number; // non-zero → failed
+  'img-progress'?: string; // dead-links marker
   links?: (string | DeepbridLink)[];
 }
 
@@ -89,14 +91,35 @@ function linkUrl(link: string | DeepbridLink): string {
   return typeof link === 'string' ? link : (link.url ?? link.link ?? '');
 }
 
-function mapStatus(status?: string): DebridDownload['status'] {
-  const s = (status ?? '').toLowerCase();
-  if (READY_STATUSES.has(s)) return 'downloaded';
-  if (s.includes('fail') || s.includes('dead')) return 'failed';
+// Deepbrid's GET /torrents/info has no `status` string — readiness is derived
+// from numeric `progress`/`error` and the presence of `links` (mirrors the
+// Deepbridge reference). The `status` string checks stay as a forward-compatible
+// fallback in case a future API adds one.
+function mapStatus(raw: DeepbridTorrent): DebridDownload['status'] {
+  const error = Number(raw.error ?? 0);
+  const progress = Number(raw.progress ?? 0);
+  const links = Array.isArray(raw.links) ? raw.links : [];
+  const img = String(raw['img-progress'] ?? '');
+  const s = (raw.status ?? '').toLowerCase();
+  if (
+    error !== 0 ||
+    /dead\.png|dead links/i.test(img) ||
+    s.includes('fail') ||
+    s.includes('dead')
+  )
+    return 'failed';
   if (s.includes('invalid')) return 'invalid';
-  if (s.includes('download') || s.includes('process')) return 'downloading';
+  if (
+    (progress >= 100 && links.length > 0) ||
+    (READY_STATUSES.has(s) && links.length > 0)
+  )
+    return 'downloaded';
+  // Complete but links not attached yet (e.g. ready_missing_links) → keep polling.
+  if (progress >= 100 || s.includes('download') || s.includes('process'))
+    return 'downloading';
+  if (progress > 0) return 'downloading';
   if (s.includes('queue') || s.includes('wait')) return 'queued';
-  return 'unknown';
+  return 'queued';
 }
 
 function mapTorrent(raw: DeepbridTorrent): DebridDownload {
@@ -116,7 +139,7 @@ function mapTorrent(raw: DeepbridTorrent): DebridDownload {
     hash: raw.hash,
     name: raw.name ?? raw.filename,
     size: raw.size,
-    status: mapStatus(raw.status),
+    status: mapStatus(raw),
     files,
   };
 }
