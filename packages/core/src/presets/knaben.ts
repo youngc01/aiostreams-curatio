@@ -1,6 +1,5 @@
 ﻿import { Option, UserData } from '../db/index.js';
 import { appConfig, constants } from '../utils/index.js';
-import { StremThruPreset } from './stremthru.js';
 import { TorznabPreset } from './torznab.js';
 
 export class KnabenPreset extends TorznabPreset {
@@ -38,7 +37,7 @@ export class KnabenPreset extends TorznabPreset {
         type: 'multi-select',
         required: false,
         showInSimpleMode: false,
-        options: StremThruPreset.supportedServices.map((service) => ({
+        options: TorznabPreset.torrentServices.map((service) => ({
           value: service,
           label: constants.SERVICE_DETAILS[service].name,
         })),
@@ -80,7 +79,7 @@ export class KnabenPreset extends TorznabPreset {
         appConfig.builtins.knaben.defaultTimeout ??
         appConfig.presets.defaultTimeout,
       USER_AGENT: appConfig.http.defaultUserAgent,
-      SUPPORTED_SERVICES: StremThruPreset.supportedServices,
+      SUPPORTED_SERVICES: TorznabPreset.torrentServices,
       DESCRIPTION:
         'An addon to get debrid results from Knaben, an indexer proxy for several indexers, including The Pirate Bay, 1337x, RARBG, YTS, Nyaa.si and more.',
       OPTIONS: options,

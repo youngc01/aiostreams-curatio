@@ -80,6 +80,7 @@ const SERVICE_LOGO_MAP: Record<ServiceId, string> = {
   altmount:
     'https://raw.githubusercontent.com/javi11/altmount/refs/heads/main/docs/static/img/logo.png',
   aiostreams: '/logo.png',
+  deepbrid: 'https://www.deepbrid.com/favicon.ico', // curatio
 };
 
 function ServiceLogo({

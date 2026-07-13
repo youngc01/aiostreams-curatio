@@ -279,6 +279,7 @@ const ALTMOUNT_SERVICE = 'altmount';
 const STREMIO_NNTP_SERVICE = 'stremio_nntp';
 const STREMTHRU_NEWZ_SERVICE = 'stremthru_newz';
 const AIOSTREAMS_SERVICE = 'aiostreams';
+const DEEPBRID_SERVICE = 'deepbrid'; // curatio: native Deepbrid support
 
 const SERVICES = [
   REALDEBRID_SERVICE,
@@ -298,6 +299,7 @@ const SERVICES = [
   STREMIO_NNTP_SERVICE,
   STREMTHRU_NEWZ_SERVICE,
   AIOSTREAMS_SERVICE,
+  DEEPBRID_SERVICE, // curatio
 ] as const;
 
 export const BUILTIN_SUPPORTED_SERVICES = [
@@ -316,6 +318,7 @@ export const BUILTIN_SUPPORTED_SERVICES = [
   EASYNEWS_SERVICE,
   STREMTHRU_NEWZ_SERVICE,
   AIOSTREAMS_SERVICE,
+  DEEPBRID_SERVICE, // curatio: resolved natively (see debrid/deepbrid.ts)
 ] as const;
 
 export type ServiceId = (typeof SERVICES)[number];
@@ -377,6 +380,27 @@ const SERVICE_DETAILS: Record<
     credentials: Option[];
   }
 > = {
+  [DEEPBRID_SERVICE]: {
+    id: DEEPBRID_SERVICE,
+    name: 'Deepbrid',
+    // curatio: 'DB' is deliberately avoided — Debrider already claims it in its
+    // knownNames, and parseServiceFromString would mis-attribute Deepbrid
+    // streams to Debrider. 'DPB' is distinct and matching is case-insensitive.
+    shortName: 'DPB',
+    knownNames: ['DPB', 'Deepbrid'],
+    signUpText:
+      "Don't have an account? [Sign up here](https://www.deepbrid.com/).",
+    credentials: [
+      {
+        id: 'apiKey',
+        name: 'API Key',
+        description:
+          'Your Deepbrid API key. Obtain it from your Deepbrid account under Devices & API.',
+        type: 'password',
+        required: true,
+      },
+    ],
+  },
   [REALDEBRID_SERVICE]: {
     id: REALDEBRID_SERVICE,
     name: 'Real-Debrid',
@@ -1585,6 +1609,7 @@ export {
   EASYNEWS_SERVICE,
   STREMTHRU_NEWZ_SERVICE,
   AIOSTREAMS_SERVICE,
+  DEEPBRID_SERVICE,
   SERVICE_DETAILS,
   TOP_LEVEL_OPTION_DETAILS,
   HEADERS_FOR_IP_FORWARDING,

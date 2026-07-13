@@ -2,7 +2,6 @@ import { Addon, Option, ParsedStream, Stream, UserData } from '../db/index.js';
 import StreamParser from '../parser/streams.js';
 import { appConfig, constants, ServiceId } from '../utils/index.js';
 import { BuiltinAddonPreset, BuiltinStreamParser } from './builtin.js';
-import { StremThruPreset } from './stremthru.js';
 
 class LibraryStreamParser extends BuiltinStreamParser {
   protected isInfoStream(stream: Stream): string | undefined {
@@ -17,7 +16,7 @@ export class LibraryPreset extends BuiltinAddonPreset {
     return LibraryStreamParser;
   }
   public static readonly supportedServices: ServiceId[] = [
-    ...StremThruPreset.supportedServices,
+    ...BuiltinAddonPreset.torrentServices,
     constants.NZBDAV_SERVICE,
     constants.ALTMOUNT_SERVICE,
     constants.STREMTHRU_NEWZ_SERVICE,

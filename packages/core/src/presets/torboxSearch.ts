@@ -11,11 +11,10 @@ import { appConfig, SERVICE_DETAILS } from '../utils/index.js';
 import { constants, ServiceId } from '../utils/index.js';
 import { StreamParser } from '../parser/index.js';
 import { BuiltinAddonPreset, BuiltinStreamParser } from './builtin.js';
-import { StremThruPreset } from './stremthru.js';
 
 export class TorBoxSearchPreset extends BuiltinAddonPreset {
   public static readonly supportedServices: ServiceId[] =
-    StremThruPreset.supportedServices;
+    BuiltinAddonPreset.torrentServices;
 
   static override getParser(): typeof StreamParser {
     return BuiltinStreamParser;

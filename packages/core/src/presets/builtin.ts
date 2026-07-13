@@ -11,7 +11,7 @@ import {
 } from '../utils/index.js';
 import { Preset } from './preset.js';
 import { releaseKeyKind } from '../release-blocklist/keys.js';
-import { stremthruSpecialCases } from './stremthru.js';
+import { StremThruPreset, stremthruSpecialCases } from './stremthru.js';
 
 export class BuiltinStreamParser extends StreamParser {
   protected override getReleaseKey(stream: Stream): string | undefined {
@@ -213,6 +213,17 @@ export class BuiltinStreamParser extends StreamParser {
 }
 
 export class BuiltinAddonPreset extends Preset {
+  /**
+   * curatio: Debrid services that can resolve torrent results from the builtin
+   * indexers. These indexers resolve natively via `getDebridService`, so this
+   * is StremThru's torrent set plus native Deepbrid — which is deliberately
+   * kept out of `StremThruPreset.supportedServices` because Deepbrid resolves
+   * via its own API rather than through StremThru.
+   */
+  static get torrentServices(): ServiceId[] {
+    return [...StremThruPreset.supportedServices, constants.DEEPBRID_SERVICE];
+  }
+
   static override getParser(): typeof StreamParser {
     return BuiltinStreamParser;
   }
